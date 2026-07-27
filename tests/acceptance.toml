@@ -1,0 +1,67 @@
+[verification]
+approved_skips = []
+manual = ["credentialed-openai-responses-smoke"]
+
+[criteria.AC-1]
+tests = ["build-contract", "sdk-contract"]
+external = ["linux-gcc", "linux-clang", "zephyr-native", "zephyr-qemu"]
+
+[criteria.AC-2]
+tests = ["id", "error", "cancel", "value-json", "value-json-invalid", "base-invalid"]
+external = []
+
+[criteria.AC-3]
+tests = ["session-no-tool", "session-tool-join", "session-actor", "session-invalid", "state-fragment-slots"]
+external = []
+
+[criteria.AC-4]
+tests = ["memory-store", "ring-store", "store-invalid", "markdown-store", "markdown-invalid", "value-sensitive"]
+external = []
+
+[criteria.AC-5]
+tests = ["registry-atomic", "registry-invalid", "plugin-lifecycle", "plugin-rolling-generation", "plugin-loader-invalid"]
+external = []
+
+[criteria.AC-6]
+tests = ["plugin-loader", "plugin-host", "plugin-process-failures", "rpc-invalid"]
+external = []
+
+[criteria.AC-7]
+tests = ["resource-skill", "resource-invalid"]
+external = []
+
+[criteria.AC-8]
+tests = ["prompt", "prompt-trust", "prompt-invalid"]
+external = []
+
+[criteria.AC-9]
+tests = ["openai-request", "openai-sse", "openai-sse-invalid", "openai-local-transport", "provider-invalid"]
+external = []
+
+[criteria.AC-10]
+tests = ["tool-policy", "tool-policy-denied", "tool-invalid", "agent-loop", "agent-failures", "agent-invalid"]
+external = []
+
+[criteria.AC-11]
+tests = ["secret", "value-sensitive", "markdown-invalid"]
+external = []
+
+[criteria.AC-12]
+tests = ["plugin-installer", "install-invalid", "cli-functional"]
+external = []
+
+[criteria.AC-13]
+tests = ["sdk-contract", "manifest-lock", "manifest-invalid"]
+external = []
+
+[criteria.AC-14]
+tests = ["cli-functional", "config-precedence", "config-invalid", "telos-build-help"]
+external = ["zephyr-shell"]
+
+[criteria.AC-15]
+tests = ["linux-agent-process-scenario", "plugin-installer", "openai-local-transport", "agent-failures"]
+external = ["zephyr-native", "zephyr-qemu-network"]
+
+[criteria.AC-16]
+tests = ["allocation-failure-matrix", "build-contract"]
+external = ["acceptance-traceability", "sanitizers", "coverage-gate", "repeated-scenarios"]
