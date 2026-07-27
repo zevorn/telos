@@ -1,6 +1,9 @@
 telos_state = static_library(
     'telos-state',
-    'session.c',
+    [
+        'fragment.c',
+        'session.c',
+    ],
     dependencies: telos_base_dep,
     include_directories: inc_public,
 )

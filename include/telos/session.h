@@ -31,13 +31,26 @@ enum telos_session_state {
 
 struct telos_session_machine;
 
+struct telos_session_options {
+    unsigned int maximum_retry_attempts;
+};
+
 struct telos_session_machine *telos_session_machine_create(
+    struct telos_error **error
+);
+
+struct telos_session_machine *telos_session_machine_create_with_options(
+    const struct telos_session_options *options,
     struct telos_error **error
 );
 
 void telos_session_machine_destroy(struct telos_session_machine *machine);
 
 enum telos_session_state telos_session_machine_state(
+    const struct telos_session_machine *machine
+);
+
+unsigned int telos_session_machine_retry_count(
     const struct telos_session_machine *machine
 );
 

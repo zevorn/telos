@@ -78,6 +78,11 @@ const struct telos_value *telos_value_get(
     const char *key
 );
 
+bool telos_value_equal(
+    const struct telos_value *lhs,
+    const struct telos_value *rhs
+);
+
 size_t telos_value_json_size(const struct telos_value *value);
 
 bool telos_value_write_json(

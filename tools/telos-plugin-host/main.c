@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <telos/rpc.h>
 
@@ -58,6 +59,13 @@ int main(void)
             body = telos_value_new_string("stopped");
             message = response("shutdown.result", body);
             stopping = true;
+        } else if (strcmp(type, "crash") == 0) {
+            telos_value_release(request);
+            return 70;
+        } else if (strcmp(type, "hang") == 0) {
+            for (;;) {
+                pause();
+            }
         } else {
             body = telos_value_new_string("unknown message type");
             message = response("error", body);

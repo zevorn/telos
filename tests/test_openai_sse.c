@@ -8,6 +8,7 @@ struct capture {
     enum telos_provider_event_kind kinds[16];
     size_t count;
     char arguments[64];
+    bool completed_arguments_valid;
 };
 
 static bool capture_event(
@@ -32,6 +33,14 @@ static bool capture_event(
             event->delta,
             sizeof(capture->arguments) - strlen(capture->arguments) - 1
         );
+    }
+    if (event->kind == TELOS_PROVIDER_TOOL_CALL_COMPLETED) {
+        const char *text = telos_value_string(
+            telos_value_get(event->payload, "text")
+        );
+
+        capture->completed_arguments_valid = text != NULL
+            && strcmp(text, "hello") == 0;
     }
     return true;
 }
@@ -107,6 +116,7 @@ int main(int argc, char **argv)
         && capture.kinds[7] == TELOS_PROVIDER_REASONING_ITEM
         && capture.kinds[8] == TELOS_PROVIDER_USAGE_UPDATE
         && capture.kinds[9] == TELOS_PROVIDER_RESPONSE_COMPLETED
+        && capture.completed_arguments_valid
         && strcmp(capture.arguments, "{\"text\":\"hello\"}") == 0;
 
     free(fixture);

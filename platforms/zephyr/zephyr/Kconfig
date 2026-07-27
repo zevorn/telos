@@ -1,0 +1,23 @@
+menuconfig TELOS
+    bool "Telos Agentic Framework"
+    default y
+    help
+      Enable the Telos static runtime integration.
+
+if TELOS
+
+config TELOS_SHELL
+    bool "Telos Shell commands"
+    default y
+    depends on SHELL
+    help
+      Expose chat, status, plugins, resources, and trace commands.
+
+config TELOS_NETWORK
+    bool "Telos Provider networking"
+    default y if NETWORKING
+    depends on NETWORKING
+    help
+      Enable the platform networking surface used by Provider Plugins.
+
+endif

@@ -10,6 +10,14 @@ project(
     ],
 )
 
+if get_option('c_std') != 'c17'
+    error('Telos requires the C17 language standard')
+endif
+
+if get_option('plugin_abi') != 1
+    error('Telos v0.1 supports Plugin ABI version 1 only')
+endif
+
 inc_public = include_directories('include')
 thread_dep = dependency('threads')
 cc = meson.get_compiler('c')
@@ -17,4 +25,10 @@ dl_dep = cc.find_library('dl', required: false)
 
 subdir('src')
 subdir('tools')
+subdir('sdk')
 subdir('tests')
+
+install_subdir(
+    'include/telos',
+    install_dir: get_option('includedir'),
+)

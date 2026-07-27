@@ -1,0 +1,11 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://telos.dev/schemas/permissions-v1.json",
+    "title": "Telos Plugin Permissions",
+    "type": "array",
+    "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9.-]*(?::[a-zA-Z0-9._-]+)?$"
+    },
+    "uniqueItems": true
+}

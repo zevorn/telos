@@ -4,3 +4,26 @@ option(
     value: true,
     description: 'Build Telos tests',
 )
+
+option(
+    'plugin_abi',
+    type: 'integer',
+    value: 1,
+    min: 1,
+    description: 'Telos Plugin ABI version',
+)
+
+option(
+    'profile',
+    type: 'combo',
+    choices: ['minimal', 'host', 'edge', 'pi-compatible'],
+    value: 'host',
+    description: 'Telos feature profile',
+)
+
+option(
+    'shared_plugins',
+    type: 'boolean',
+    value: true,
+    description: 'Build Linux shared Plugin support',
+)

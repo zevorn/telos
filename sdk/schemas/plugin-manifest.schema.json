@@ -1,0 +1,77 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://telos.dev/schemas/plugin-manifest-v1.json",
+    "title": "Telos Plugin Manifest v1",
+    "type": "object",
+    "required": ["plugin", "runtime", "platform", "build", "permissions"],
+    "properties": {
+        "plugin": {
+            "type": "object",
+            "required": ["id", "name", "version", "abi", "entry"],
+            "properties": {
+                "id": {"type": "string", "pattern": "^[a-z0-9]+([.-][a-z0-9]+)+$"},
+                "name": {"type": "string", "minLength": 1},
+                "version": {"type": "string", "minLength": 1},
+                "abi": {"const": 1},
+                "entry": {"const": "telos_plugin_init_v1"}
+            },
+            "additionalProperties": false
+        },
+        "runtime": {
+            "type": "object",
+            "required": ["modes", "default"],
+            "properties": {
+                "modes": {
+                    "type": "array",
+                    "items": {"enum": ["builtin", "inprocess", "process", "static"]},
+                    "minItems": 1,
+                    "uniqueItems": true
+                },
+                "default": {"enum": ["builtin", "inprocess", "process", "static"]}
+            },
+            "additionalProperties": false
+        },
+        "platform": {
+            "type": "object",
+            "required": ["targets"],
+            "properties": {
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "enum": [
+                            "linux-x86_64",
+                            "linux-aarch64",
+                            "linux-riscv64",
+                            "zephyr-arm64",
+                            "zephyr-native"
+                        ]
+                    },
+                    "minItems": 1,
+                    "uniqueItems": true
+                }
+            },
+            "additionalProperties": false
+        },
+        "build": {
+            "type": "object",
+            "required": ["system"],
+            "properties": {
+                "system": {"const": "meson"}
+            },
+            "additionalProperties": false
+        },
+        "permissions": {
+            "type": "object",
+            "required": ["required"],
+            "properties": {
+                "required": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": true
+                }
+            },
+            "additionalProperties": false
+        }
+    },
+    "additionalProperties": false
+}

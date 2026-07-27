@@ -1,0 +1,21 @@
+FROM debian:stable-slim AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        meson \
+        ninja-build \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /telos
+COPY . .
+RUN meson setup /telos-build -Dtests=false --prefix=/opt/telos \
+    && meson compile -C /telos-build telos-plugin-host \
+    && meson install -C /telos-build
+
+FROM debian:stable-slim
+RUN useradd --system --uid 65532 --home-dir /nonexistent telos
+COPY --from=build /opt/telos/bin/telos-plugin-host \
+    /usr/local/bin/telos-plugin-host
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/telos-plugin-host"]

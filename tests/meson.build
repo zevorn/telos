@@ -119,6 +119,14 @@ if get_option('tests')
 
     test('session-retry', test_session_retry)
 
+    test_session_retry_exhausted = executable(
+        'test-session-retry-exhausted',
+        'test_session_retry_exhausted.c',
+        dependencies: telos_dep,
+    )
+
+    test('session-retry-exhausted', test_session_retry_exhausted)
+
     test_session_failure = executable(
         'test-session-failure',
         'test_session_failure.c',
@@ -126,6 +134,14 @@ if get_option('tests')
     )
 
     test('session-failure', test_session_failure)
+
+    test_state_fragment = executable(
+        'test-state-fragment',
+        'test_state_fragment.c',
+        dependencies: telos_dep,
+    )
+
+    test('state-fragment-slots', test_state_fragment)
 
     test_memory_store = executable(
         'test-memory-store',
@@ -167,6 +183,30 @@ if get_option('tests')
 
     test('value-sensitive', test_value_sensitive)
 
+    test_value_equal = executable(
+        'test-value-equal',
+        'test_value_equal.c',
+        dependencies: telos_dep,
+    )
+
+    test('value-equal', test_value_equal)
+
+    test_clock = executable(
+        'test-clock',
+        'test_clock.c',
+        dependencies: telos_dep,
+    )
+
+    test('clock', test_clock)
+
+    test_trace = executable(
+        'test-trace',
+        'test_trace.c',
+        dependencies: telos_dep,
+    )
+
+    test('trace', test_trace)
+
     test_markdown_store = executable(
         'test-markdown-store',
         'test_markdown_store.c',
@@ -206,6 +246,22 @@ if get_option('tests')
     )
 
     test('plugin-lifecycle', test_plugin_lifecycle)
+
+    test_host_api = executable(
+        'test-host-api',
+        'test_host_api.c',
+        dependencies: telos_dep,
+    )
+
+    test('plugin-host-api-table', test_host_api)
+
+    test_plugin_rolling = executable(
+        'test-plugin-rolling',
+        'test_plugin_rolling.c',
+        dependencies: telos_dep,
+    )
+
+    test('plugin-rolling-generation', test_plugin_rolling)
 
     fixture_plugin_good = shared_module(
         'fixture-plugin-good',
@@ -257,6 +313,19 @@ if get_option('tests')
     test(
         'plugin-host',
         test_plugin_host,
+        args: telos_plugin_host.full_path(),
+        depends: telos_plugin_host,
+    )
+
+    test_plugin_process = executable(
+        'test-plugin-process',
+        'test_plugin_process.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'plugin-process-failures',
+        test_plugin_process,
         args: telos_plugin_host.full_path(),
         depends: telos_plugin_host,
     )
@@ -313,6 +382,18 @@ if get_option('tests')
 
     test('openai-sse-invalid', test_openai_sse_invalid)
 
+    test_openai_transport = executable(
+        'test-openai-transport',
+        'test_openai_transport.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'openai-local-transport',
+        test_openai_transport,
+        args: meson.current_source_dir() / 'fixtures/responses.sse',
+    )
+
     test_tool_policy = executable(
         'test-tool-policy',
         'test_tool_policy.c',
@@ -329,6 +410,22 @@ if get_option('tests')
 
     test('tool-policy-denied', test_tool_policy_denied)
 
+    test_agent_loop = executable(
+        'test-agent-loop',
+        'test_agent_loop.c',
+        dependencies: telos_dep,
+    )
+
+    test('agent-loop', test_agent_loop)
+
+    test_agent_failures = executable(
+        'test-agent-failures',
+        'test_agent_failures.c',
+        dependencies: telos_dep,
+    )
+
+    test('agent-failures', test_agent_failures)
+
     test_secret = executable(
         'test-secret',
         'test_secret.c',
@@ -336,4 +433,113 @@ if get_option('tests')
     )
 
     test('secret', test_secret)
+
+    test(
+        'sdk-contract',
+        find_program('sh'),
+        args: [
+            meson.current_source_dir() / 'test_sdk_contract.sh',
+            meson.project_build_root(),
+            meson.project_source_root(),
+            telos_abi_check.full_path(),
+        ],
+        depends: telos_abi_check,
+        timeout: 120,
+    )
+
+    test_manifest = executable(
+        'test-manifest',
+        'test_manifest.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'manifest-lock',
+        test_manifest,
+        args: meson.project_source_root()
+            / 'sdk/templates/tool/plugin.toml',
+    )
+
+    test_installer = executable(
+        'test-installer',
+        'test_installer.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'plugin-installer',
+        find_program('sh'),
+        args: [
+            meson.current_source_dir() / 'test_installer.sh',
+            meson.project_build_root(),
+            meson.project_source_root(),
+            test_installer.full_path(),
+            telos_abi_check.full_path(),
+        ],
+        depends: [
+            test_installer,
+            telos_abi_check,
+        ],
+        timeout: 180,
+    )
+
+    test_config = executable(
+        'test-config',
+        'test_config.c',
+        dependencies: telos_dep,
+    )
+
+    test('config-precedence', test_config)
+
+    test(
+        'cli-functional',
+        find_program('sh'),
+        args: [
+            meson.current_source_dir() / 'test_cli.sh',
+            meson.project_build_root(),
+            meson.project_source_root(),
+            telos_cli.full_path(),
+            telos_abi_check.full_path(),
+        ],
+        depends: [
+            telos_cli,
+            telos_abi_check,
+        ],
+        timeout: 180,
+    )
+
+    zephyr_source_generator = find_program(
+        meson.project_source_root() / 'tools/generate_zephyr_sources.py',
+    )
+
+    test(
+        'build-contract',
+        find_program('sh'),
+        args: [
+            meson.current_source_dir() / 'test_build_contract.sh',
+            meson.project_source_root(),
+            zephyr_source_generator.full_path(),
+        ],
+        timeout: 60,
+    )
+
+    test_linux_scenario = executable(
+        'test-linux-scenario',
+        'test_linux_scenario.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'linux-agent-process-scenario',
+        test_linux_scenario,
+        args: telos_plugin_host.full_path(),
+        depends: telos_plugin_host,
+        timeout: 30,
+    )
+
+    test(
+        'telos-build-help',
+        telos_build,
+        args: '--help',
+    )
 endif

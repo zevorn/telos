@@ -1,0 +1,13 @@
+[component.base]
+sources = [
+    "src/base/error.c",
+    "src/base/event.c",
+    "src/base/id.c",
+    "src/base/value.c",
+    "src/base/value_json.c",
+]
+
+[component.state]
+sources = [
+    "src/state/session.c",
+]

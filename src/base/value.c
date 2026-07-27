@@ -428,3 +428,62 @@ const struct telos_value *telos_value_get(
 
     return NULL;
 }
+
+bool telos_value_equal(
+    const struct telos_value *lhs,
+    const struct telos_value *rhs
+)
+{
+    if (lhs == rhs) {
+        return true;
+    }
+    if (lhs == NULL || rhs == NULL || lhs->type != rhs->type) {
+        return false;
+    }
+
+    switch (lhs->type) {
+    case TELOS_VALUE_NULL:
+        return true;
+    case TELOS_VALUE_BOOLEAN:
+        return lhs->data.boolean == rhs->data.boolean;
+    case TELOS_VALUE_INTEGER:
+        return lhs->data.integer == rhs->data.integer;
+    case TELOS_VALUE_REAL:
+        return lhs->data.real == rhs->data.real;
+    case TELOS_VALUE_STRING:
+    case TELOS_VALUE_SENSITIVE:
+        return strcmp(lhs->data.string, rhs->data.string) == 0;
+    case TELOS_VALUE_ARRAY:
+        if (lhs->data.array.count != rhs->data.array.count) {
+            return false;
+        }
+        for (size_t index = 0; index < lhs->data.array.count; ++index) {
+            if (!telos_value_equal(
+                lhs->data.array.items[index],
+                rhs->data.array.items[index]
+            )) {
+                return false;
+            }
+        }
+        return true;
+    case TELOS_VALUE_OBJECT:
+        if (lhs->data.object.count != rhs->data.object.count) {
+            return false;
+        }
+        for (size_t index = 0; index < lhs->data.object.count; ++index) {
+            const struct telos_object_entry *entry =
+                &lhs->data.object.entries[index];
+            const struct telos_value *other = telos_value_get(
+                rhs,
+                entry->key
+            );
+
+            if (!telos_value_equal(entry->value, other)) {
+                return false;
+            }
+        }
+        return true;
+    default:
+        return false;
+    }
+}

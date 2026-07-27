@@ -5,6 +5,8 @@
 #include <stddef.h>
 
 #include <telos/provider.h>
+#include <telos/secret.h>
+#include <telos/transport.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,6 +18,36 @@ enum telos_openai_unknown_event_policy {
 };
 
 struct telos_openai_sse_parser;
+struct telos_openai_responses_provider;
+
+struct telos_openai_responses_config {
+    const char *model;
+    const char *endpoint;
+    const char *secret_reference;
+    struct telos_secret_broker *secret_broker;
+    const char *const *capabilities;
+    size_t capability_count;
+    telos_transport_send_fn send;
+    void *transport_context;
+    enum telos_openai_unknown_event_policy unknown_event_policy;
+};
+
+struct telos_openai_responses_provider *telos_openai_responses_provider_create(
+    const struct telos_openai_responses_config *config,
+    struct telos_error **error
+);
+
+void telos_openai_responses_provider_destroy(
+    struct telos_openai_responses_provider *provider
+);
+
+bool telos_openai_responses_provider_dispatch(
+    const struct telos_provider_request *request,
+    telos_provider_event_fn emit,
+    void *emit_context,
+    void *provider_context,
+    struct telos_error **error
+);
 
 struct telos_value *telos_openai_responses_build_request(
     const char *model,

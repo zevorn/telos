@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <telos/rpc.h>
@@ -29,7 +30,11 @@ static bool write_all(
     const unsigned char *cursor = data;
 
     while (size > 0) {
-        ssize_t written = write(descriptor, cursor, size);
+        ssize_t written = send(descriptor, cursor, size, MSG_NOSIGNAL);
+
+        if (written < 0 && errno == ENOTSOCK) {
+            written = write(descriptor, cursor, size);
+        }
 
         if (written < 0 && errno == EINTR) {
             continue;

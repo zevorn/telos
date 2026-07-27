@@ -1,0 +1,24 @@
+FROM debian:stable-slim AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        gcc \
+        git \
+        meson \
+        ninja-build \
+        pkg-config \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /telos
+COPY . .
+RUN meson setup /telos-build -Dtests=false --prefix=/opt/telos-sdk \
+    && meson compile -C /telos-build \
+    && meson install -C /telos-build
+
+ENV PATH="/opt/telos-sdk/bin:${PATH}"
+ENV PKG_CONFIG_PATH="/opt/telos-sdk/lib/x86_64-linux-gnu/pkgconfig:/opt/telos-sdk/lib/pkgconfig"
+WORKDIR /workspace
+ENTRYPOINT ["telos-build"]

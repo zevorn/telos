@@ -5,7 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <telos/clock.h>
+#include <telos/event.h>
 #include <telos/registry.h>
+#include <telos/value.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,12 +27,54 @@ enum telos_plugin_state {
     TELOS_PLUGIN_UNLOADED,
 };
 
+struct telos_allocator_api_v1 {
+    uint32_t struct_size;
+    void *(*allocate)(size_t size);
+    void *(*reallocate)(void *allocation, size_t size);
+    void (*deallocate)(void *allocation);
+};
+
+struct telos_value_api_v1 {
+    uint32_t struct_size;
+    struct telos_value *(*retain)(const struct telos_value *value);
+    void (*release)(const struct telos_value *value);
+    struct telos_value *(*parse_json)(
+        const char *json,
+        size_t size,
+        struct telos_error **error
+    );
+    bool (*write_json)(
+        const struct telos_value *value,
+        char *buffer,
+        size_t buffer_size,
+        size_t *written,
+        struct telos_error **error
+    );
+};
+
+struct telos_event_api_v1 {
+    uint32_t struct_size;
+    struct telos_event *(*retain)(const struct telos_event *event);
+    void (*release)(const struct telos_event *event);
+};
+
 struct telos_host_api_v1 {
     uint32_t abi_version;
     uint32_t struct_size;
     void *context;
     void (*log)(void *context, int level, const char *message);
+    const struct telos_allocator_api_v1 *allocator;
+    const struct telos_value_api_v1 *value;
+    const struct telos_event_api_v1 *event;
+    struct telos_clock clock;
 };
+
+bool telos_host_api_v1_initialize(
+    struct telos_host_api_v1 *host,
+    void *context,
+    void (*log)(void *context, int level, const char *message),
+    struct telos_error **error
+);
 
 struct telos_plugin_registrar_v1 {
     uint32_t abi_version;

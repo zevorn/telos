@@ -14,6 +14,27 @@ struct telos_plugin_instance {
     bool healthy;
 };
 
+static const struct telos_allocator_api_v1 allocator_api = {
+    .struct_size = sizeof(allocator_api),
+    .allocate = malloc,
+    .reallocate = realloc,
+    .deallocate = free,
+};
+
+static const struct telos_value_api_v1 value_api = {
+    .struct_size = sizeof(value_api),
+    .retain = telos_value_retain,
+    .release = telos_value_release,
+    .parse_json = telos_value_parse_json,
+    .write_json = telos_value_write_json,
+};
+
+static const struct telos_event_api_v1 event_api = {
+    .struct_size = sizeof(event_api),
+    .retain = telos_event_retain,
+    .release = telos_event_release,
+};
+
 static void set_error(
     struct telos_error **error,
     enum telos_error_domain domain,
@@ -35,6 +56,38 @@ static char *copy_string(const char *value)
         memcpy(copy, value, size);
     }
     return copy;
+}
+
+bool telos_host_api_v1_initialize(
+    struct telos_host_api_v1 *host,
+    void *context,
+    void (*log)(void *context, int level, const char *message),
+    struct telos_error **error
+)
+{
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (host == NULL || log == NULL) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Plugin Host API and bootstrap logger are required"
+        );
+        return false;
+    }
+    *host = (struct telos_host_api_v1) {
+        .abi_version = TELOS_PLUGIN_ABI_VERSION,
+        .struct_size = sizeof(*host),
+        .context = context,
+        .log = log,
+        .allocator = &allocator_api,
+        .value = &value_api,
+        .event = &event_api,
+        .clock = telos_system_clock(),
+    };
+    return true;
 }
 
 struct telos_plugin_instance *telos_plugin_instance_create(

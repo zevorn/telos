@@ -9,6 +9,8 @@ struct telos_session_machine {
     enum telos_session_state retry_state;
     uint64_t last_sequence;
     uint64_t pending_tools;
+    unsigned int retry_count;
+    unsigned int maximum_retry_attempts;
 };
 
 struct transition {
@@ -101,12 +103,33 @@ struct telos_session_machine *telos_session_machine_create(
     struct telos_error **error
 )
 {
+    const struct telos_session_options options = {
+        .maximum_retry_attempts = 3,
+    };
+
+    return telos_session_machine_create_with_options(&options, error);
+}
+
+struct telos_session_machine *telos_session_machine_create_with_options(
+    const struct telos_session_options *options,
+    struct telos_error **error
+)
+{
     struct telos_session_machine *machine;
 
     if (error != NULL) {
         *error = NULL;
     }
 
+    if (options == NULL || options->maximum_retry_attempts == 0) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "session retry limit must be greater than zero"
+        );
+        return NULL;
+    }
     machine = calloc(1, sizeof(*machine));
     if (machine == NULL) {
         set_error(
@@ -119,6 +142,7 @@ struct telos_session_machine *telos_session_machine_create(
     }
 
     machine->state = TELOS_SESSION_IDLE;
+    machine->maximum_retry_attempts = options->maximum_retry_attempts;
     return machine;
 }
 
@@ -132,6 +156,13 @@ enum telos_session_state telos_session_machine_state(
 )
 {
     return machine == NULL ? 0 : machine->state;
+}
+
+unsigned int telos_session_machine_retry_count(
+    const struct telos_session_machine *machine
+)
+{
+    return machine == NULL ? 0 : machine->retry_count;
 }
 
 bool telos_session_machine_apply(
@@ -236,6 +267,13 @@ bool telos_session_machine_apply(
         && machine->state != TELOS_SESSION_RETRYING
         && machine->state != TELOS_SESSION_FAILED
     ) {
+        if (machine->retry_count >= machine->maximum_retry_attempts) {
+            machine->state = TELOS_SESSION_FAILING;
+            machine->retry_state = 0;
+            machine->last_sequence = sequence;
+            return true;
+        }
+        machine->retry_count += 1;
         machine->retry_state = machine->state;
         machine->state = TELOS_SESSION_RETRYING;
         machine->last_sequence = sequence;

@@ -1,0 +1,19 @@
+[plugin]
+id = "dev.example.echo-tool"
+name = "Echo Tool"
+version = "0.1.0"
+abi = 1
+entry = "telos_plugin_init_v1"
+
+[runtime]
+modes = ["process", "inprocess", "static"]
+default = "process"
+
+[platform]
+targets = ["linux-x86_64", "linux-aarch64", "zephyr-arm64"]
+
+[build]
+system = "meson"
+
+[permissions]
+required = []

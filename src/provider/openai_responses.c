@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,18 @@ struct telos_openai_sse_parser {
     size_t tool_call_count;
     size_t tool_call_capacity;
     bool finished;
+};
+
+struct telos_openai_responses_provider {
+    char *model;
+    char *endpoint;
+    struct telos_secret_reference *secret_reference;
+    struct telos_secret_broker *secret_broker;
+    char **capabilities;
+    size_t capability_count;
+    telos_transport_send_fn send;
+    void *transport_context;
+    enum telos_openai_unknown_event_policy unknown_event_policy;
 };
 
 static void set_error(
@@ -491,17 +504,52 @@ static bool map_event(
             );
             return false;
         }
-        return emit(
-            parser,
-            TELOS_PROVIDER_TOOL_CALL_COMPLETED,
-            NULL,
-            item_id,
-            call->call_id,
-            string_field(item, "name"),
-            string_field(item, "arguments"),
-            item,
-            error
-        );
+        {
+            const char *arguments = string_field(item, "arguments");
+            struct telos_value *parsed_arguments;
+            bool result;
+
+            if (arguments == NULL) {
+                set_error(
+                    error,
+                    TELOS_ERROR_DOMAIN_PROTOCOL,
+                    EPROTO,
+                    "completed Responses Tool Call has no arguments"
+                );
+                return false;
+            }
+            parsed_arguments = telos_value_parse_json(
+                arguments,
+                strlen(arguments),
+                error
+            );
+            if (
+                parsed_arguments == NULL
+                || telos_value_type(parsed_arguments) != TELOS_VALUE_OBJECT
+            ) {
+                telos_value_release(parsed_arguments);
+                set_error(
+                    error,
+                    TELOS_ERROR_DOMAIN_PROTOCOL,
+                    EPROTO,
+                    "Responses Tool arguments are not a JSON object"
+                );
+                return false;
+            }
+            result = emit(
+                parser,
+                TELOS_PROVIDER_TOOL_CALL_COMPLETED,
+                NULL,
+                item_id,
+                call->call_id,
+                string_field(item, "name"),
+                arguments,
+                parsed_arguments,
+                error
+            );
+            telos_value_release(parsed_arguments);
+            return result;
+        }
     }
     if (strcmp(type, "response.output_text.delta") == 0) {
         const char *delta = string_field(data, "delta");
@@ -943,4 +991,333 @@ bool telos_openai_sse_parser_finish(
     }
     parser->finished = true;
     return true;
+}
+
+static void clear_capabilities(
+    struct telos_openai_responses_provider *provider
+)
+{
+    for (size_t index = 0; index < provider->capability_count; ++index) {
+        free(provider->capabilities[index]);
+    }
+    free(provider->capabilities);
+}
+
+static bool has_capability(
+    const struct telos_openai_responses_config *config,
+    const char *required
+)
+{
+    for (size_t index = 0; index < config->capability_count; ++index) {
+        if (
+            config->capabilities[index] != NULL
+            && strcmp(config->capabilities[index], required) == 0
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct telos_openai_responses_provider *telos_openai_responses_provider_create(
+    const struct telos_openai_responses_config *config,
+    struct telos_error **error
+)
+{
+    struct telos_openai_responses_provider *provider;
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (
+        config == NULL
+        || config->model == NULL
+        || config->model[0] == '\0'
+        || config->endpoint == NULL
+        || config->endpoint[0] == '\0'
+        || config->secret_reference == NULL
+        || config->secret_broker == NULL
+        || config->send == NULL
+        || (config->capability_count > 0 && config->capabilities == NULL)
+        || !has_capability(config, "network.https")
+        || (
+            config->unknown_event_policy
+                != TELOS_OPENAI_UNKNOWN_EVENT_IGNORE
+            && config->unknown_event_policy
+                != TELOS_OPENAI_UNKNOWN_EVENT_ERROR
+        )
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Responses Provider configuration is invalid"
+        );
+        return NULL;
+    }
+    provider = calloc(1, sizeof(*provider));
+    if (provider == NULL) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Responses Provider allocation failed"
+        );
+        return NULL;
+    }
+    provider->model = copy_string(config->model);
+    provider->endpoint = copy_string(config->endpoint);
+    provider->secret_reference = telos_secret_reference_create(
+        config->secret_reference,
+        error
+    );
+    if (
+        provider->model == NULL
+        || provider->endpoint == NULL
+        || provider->secret_reference == NULL
+    ) {
+        telos_openai_responses_provider_destroy(provider);
+        if (error == NULL || *error == NULL) {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_MEMORY,
+                ENOMEM,
+                "Responses Provider metadata allocation failed"
+            );
+        }
+        return NULL;
+    }
+    if (config->capability_count > 0) {
+        if (
+            config->capability_count
+            > SIZE_MAX / sizeof(*provider->capabilities)
+        ) {
+            telos_openai_responses_provider_destroy(provider);
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_MEMORY,
+                ENOMEM,
+                "Responses Provider capability size overflow"
+            );
+            return NULL;
+        }
+        provider->capabilities = calloc(
+            config->capability_count,
+            sizeof(*provider->capabilities)
+        );
+        if (provider->capabilities == NULL) {
+            telos_openai_responses_provider_destroy(provider);
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_MEMORY,
+                ENOMEM,
+                "Responses Provider capability allocation failed"
+            );
+            return NULL;
+        }
+        for (
+            size_t index = 0;
+            index < config->capability_count;
+            ++index
+        ) {
+            if (config->capabilities[index] == NULL) {
+                provider->capability_count = index;
+                telos_openai_responses_provider_destroy(provider);
+                set_error(
+                    error,
+                    TELOS_ERROR_DOMAIN_ARGUMENT,
+                    EINVAL,
+                    "Responses Provider capability is invalid"
+                );
+                return NULL;
+            }
+            provider->capabilities[index] = copy_string(
+                config->capabilities[index]
+            );
+            if (provider->capabilities[index] == NULL) {
+                provider->capability_count = index;
+                telos_openai_responses_provider_destroy(provider);
+                set_error(
+                    error,
+                    TELOS_ERROR_DOMAIN_MEMORY,
+                    ENOMEM,
+                    "Responses Provider capability copy failed"
+                );
+                return NULL;
+            }
+            provider->capability_count = index + 1;
+        }
+    }
+    provider->secret_broker = config->secret_broker;
+    provider->send = config->send;
+    provider->transport_context = config->transport_context;
+    provider->unknown_event_policy = config->unknown_event_policy;
+    return provider;
+}
+
+void telos_openai_responses_provider_destroy(
+    struct telos_openai_responses_provider *provider
+)
+{
+    if (provider == NULL) {
+        return;
+    }
+    clear_capabilities(provider);
+    telos_secret_reference_destroy(provider->secret_reference);
+    free(provider->endpoint);
+    free(provider->model);
+    free(provider);
+}
+
+static bool receive_sse(
+    const char *data,
+    size_t size,
+    void *context,
+    struct telos_error **error
+)
+{
+    return telos_openai_sse_parser_feed(context, data, size, error);
+}
+
+bool telos_openai_responses_provider_dispatch(
+    const struct telos_provider_request *request,
+    telos_provider_event_fn emit_callback,
+    void *emit_context,
+    void *provider_context,
+    struct telos_error **error
+)
+{
+    struct telos_openai_responses_provider *provider = provider_context;
+    struct telos_value *body_value = NULL;
+    size_t body_size;
+    char *body = NULL;
+    char *url = NULL;
+    size_t url_size;
+    struct telos_secret_material *secret = NULL;
+    struct telos_openai_sse_parser *parser = NULL;
+    int status_code = 0;
+    bool result = false;
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (provider == NULL || request == NULL || emit_callback == NULL) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Responses Provider dispatch arguments are invalid"
+        );
+        return false;
+    }
+    body_value = telos_openai_responses_build_request(
+        provider->model,
+        request,
+        error
+    );
+    body_size = telos_value_json_size(body_value);
+    if (body_value == NULL || body_size == 0) {
+        goto cleanup;
+    }
+    body = malloc(body_size);
+    if (
+        body == NULL
+        || !telos_value_write_json(
+            body_value,
+            body,
+            body_size,
+            NULL,
+            error
+        )
+    ) {
+        if (body == NULL) {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_MEMORY,
+                ENOMEM,
+                "Responses request serialization allocation failed"
+            );
+        }
+        goto cleanup;
+    }
+    url_size = strlen(provider->endpoint) + strlen("/responses") + 1;
+    url = malloc(url_size);
+    if (url == NULL) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Responses endpoint allocation failed"
+        );
+        goto cleanup;
+    }
+    snprintf(
+        url,
+        url_size,
+        "%s%sresponses",
+        provider->endpoint,
+        provider->endpoint[strlen(provider->endpoint) - 1] == '/'
+            ? ""
+            : "/"
+    );
+    secret = telos_secret_broker_resolve(
+        provider->secret_broker,
+        provider->secret_reference,
+        "provider.openai",
+        (const char *const *)provider->capabilities,
+        provider->capability_count,
+        true,
+        error
+    );
+    if (secret == NULL) {
+        goto cleanup;
+    }
+    parser = telos_openai_sse_parser_create(
+        provider->unknown_event_policy,
+        emit_callback,
+        emit_context,
+        error
+    );
+    if (parser == NULL) {
+        goto cleanup;
+    }
+    {
+        const struct telos_transport_request transport_request = {
+            .method = "POST",
+            .url = url,
+            .content_type = "application/json",
+            .bearer_token = telos_secret_material_data(secret),
+            .body = body,
+            .body_size = body_size - 1,
+        };
+
+        if (!provider->send(
+            &transport_request,
+            receive_sse,
+            parser,
+            &status_code,
+            provider->transport_context,
+            error
+        )) {
+            goto cleanup;
+        }
+    }
+    if (status_code < 200 || status_code >= 300) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_PROTOCOL,
+            status_code,
+            "Responses transport returned a non-success status"
+        );
+        goto cleanup;
+    }
+    result = telos_openai_sse_parser_finish(parser, error);
+
+cleanup:
+    telos_openai_sse_parser_destroy(parser);
+    telos_secret_material_destroy(secret);
+    free(url);
+    free(body);
+    telos_value_release(body_value);
+    return result;
 }

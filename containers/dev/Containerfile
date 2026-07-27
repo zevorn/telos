@@ -1,0 +1,16 @@
+FROM debian:stable-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        clang \
+        clangd \
+        gdb \
+        gcc \
+        git \
+        meson \
+        ninja-build \
+        pkg-config \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
