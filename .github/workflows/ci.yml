@@ -125,7 +125,7 @@ jobs:
             - uses: zephyrproject-rtos/action-zephyr-setup@v1
               with:
                   app-path: telos
-                  toolchains: arm-zephyr-eabi
+                  toolchains: arm-zephyr-eabi:aarch64-zephyr-elf
                   sdk-version: 1.0.1
             - name: Install QEMU
               run: |
