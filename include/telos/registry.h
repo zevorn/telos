@@ -1,0 +1,107 @@
+#ifndef TELOS_REGISTRY_H
+#define TELOS_REGISTRY_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <telos/error.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum telos_extension_kind {
+    TELOS_EXTENSION_PROVIDER = 1,
+    TELOS_EXTENSION_TOOL,
+    TELOS_EXTENSION_POLICY,
+    TELOS_EXTENSION_CONTEXT_SOURCE,
+    TELOS_EXTENSION_STORE,
+    TELOS_EXTENSION_WORKFLOW_STEP,
+    TELOS_EXTENSION_TRANSPORT,
+    TELOS_EXTENSION_CODEC,
+    TELOS_EXTENSION_FRONTEND,
+    TELOS_EXTENSION_BUILDER,
+    TELOS_EXTENSION_STATE_FRAGMENT,
+    TELOS_EXTENSION_EVENT_HANDLER,
+    TELOS_EXTENSION_PROMPT,
+};
+
+struct telos_extension_descriptor {
+    const char *id;
+    const char *plugin_id;
+    enum telos_extension_kind kind;
+    const char *const *required_capabilities;
+    size_t required_capability_count;
+    const void *implementation;
+};
+
+struct telos_registry;
+struct telos_registry_transaction;
+struct telos_registry_generation;
+
+struct telos_registry *telos_registry_create(
+    const char *const *capabilities,
+    size_t capability_count,
+    struct telos_error **error
+);
+
+void telos_registry_destroy(struct telos_registry *registry);
+
+struct telos_registry_generation *telos_registry_acquire(
+    struct telos_registry *registry
+);
+
+struct telos_registry_generation *telos_registry_generation_retain(
+    const struct telos_registry_generation *generation
+);
+
+void telos_registry_generation_release(
+    const struct telos_registry_generation *generation
+);
+
+uint64_t telos_registry_generation_number(
+    const struct telos_registry_generation *generation
+);
+
+size_t telos_registry_generation_count(
+    const struct telos_registry_generation *generation
+);
+
+const struct telos_extension_descriptor *telos_registry_generation_at(
+    const struct telos_registry_generation *generation,
+    size_t index
+);
+
+const struct telos_extension_descriptor *telos_registry_generation_find(
+    const struct telos_registry_generation *generation,
+    enum telos_extension_kind kind,
+    const char *id
+);
+
+struct telos_registry_transaction *telos_registry_transaction_begin(
+    struct telos_registry *registry,
+    const char *plugin_id,
+    struct telos_error **error
+);
+
+bool telos_registry_transaction_add(
+    struct telos_registry_transaction *transaction,
+    const struct telos_extension_descriptor *descriptor,
+    struct telos_error **error
+);
+
+bool telos_registry_transaction_commit(
+    struct telos_registry_transaction *transaction,
+    struct telos_error **error
+);
+
+void telos_registry_transaction_abort(
+    struct telos_registry_transaction *transaction
+);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

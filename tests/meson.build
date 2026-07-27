@@ -182,4 +182,158 @@ if get_option('tests')
     )
 
     test('markdown-store-partial', test_markdown_store_partial)
+
+    test_registry = executable(
+        'test-registry',
+        'test_registry.c',
+        dependencies: telos_dep,
+    )
+
+    test('registry', test_registry)
+
+    test_registry_atomic = executable(
+        'test-registry-atomic',
+        'test_registry_atomic.c',
+        dependencies: telos_dep,
+    )
+
+    test('registry-atomic', test_registry_atomic)
+
+    test_plugin_lifecycle = executable(
+        'test-plugin-lifecycle',
+        'test_plugin_lifecycle.c',
+        dependencies: telos_dep,
+    )
+
+    test('plugin-lifecycle', test_plugin_lifecycle)
+
+    fixture_plugin_good = shared_module(
+        'fixture-plugin-good',
+        'fixtures/plugin_good.c',
+        include_directories: inc_public,
+        name_prefix: '',
+    )
+
+    test_plugin_loader = executable(
+        'test-plugin-loader',
+        'test_plugin_loader.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'plugin-loader',
+        test_plugin_loader,
+        args: fixture_plugin_good.full_path(),
+        depends: fixture_plugin_good,
+    )
+
+    test_plugin_loader_abi = executable(
+        'test-plugin-loader-abi',
+        'test_plugin_loader_abi.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'plugin-loader-abi',
+        test_plugin_loader_abi,
+        args: fixture_plugin_good.full_path(),
+        depends: fixture_plugin_good,
+    )
+
+    test_rpc_invalid = executable(
+        'test-rpc-invalid',
+        'test_rpc_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('rpc-invalid', test_rpc_invalid)
+
+    test_plugin_host = executable(
+        'test-plugin-host',
+        'test_plugin_host.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'plugin-host',
+        test_plugin_host,
+        args: telos_plugin_host.full_path(),
+        depends: telos_plugin_host,
+    )
+
+    test_resource_skill = executable(
+        'test-resource-skill',
+        'test_resource_skill.c',
+        dependencies: telos_dep,
+    )
+
+    test('resource-skill', test_resource_skill)
+
+    test_prompt = executable(
+        'test-prompt',
+        'test_prompt.c',
+        dependencies: telos_dep,
+    )
+
+    test('prompt', test_prompt)
+
+    test_prompt_trust = executable(
+        'test-prompt-trust',
+        'test_prompt_trust.c',
+        dependencies: telos_dep,
+    )
+
+    test('prompt-trust', test_prompt_trust)
+
+    test_openai_request = executable(
+        'test-openai-request',
+        'test_openai_request.c',
+        dependencies: telos_dep,
+    )
+
+    test('openai-request', test_openai_request)
+
+    test_openai_sse = executable(
+        'test-openai-sse',
+        'test_openai_sse.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'openai-sse',
+        test_openai_sse,
+        args: meson.current_source_dir() / 'fixtures/responses.sse',
+    )
+
+    test_openai_sse_invalid = executable(
+        'test-openai-sse-invalid',
+        'test_openai_sse_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('openai-sse-invalid', test_openai_sse_invalid)
+
+    test_tool_policy = executable(
+        'test-tool-policy',
+        'test_tool_policy.c',
+        dependencies: telos_dep,
+    )
+
+    test('tool-policy', test_tool_policy)
+
+    test_tool_policy_denied = executable(
+        'test-tool-policy-denied',
+        'test_tool_policy_denied.c',
+        dependencies: telos_dep,
+    )
+
+    test('tool-policy-denied', test_tool_policy_denied)
+
+    test_secret = executable(
+        'test-secret',
+        'test_secret.c',
+        dependencies: telos_dep,
+    )
+
+    test('secret', test_secret)
 endif

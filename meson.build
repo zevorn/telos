@@ -12,6 +12,9 @@ project(
 
 inc_public = include_directories('include')
 thread_dep = dependency('threads')
+cc = meson.get_compiler('c')
+dl_dep = cc.find_library('dl', required: false)
 
 subdir('src')
+subdir('tools')
 subdir('tests')
