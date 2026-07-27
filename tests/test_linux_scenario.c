@@ -62,9 +62,9 @@ static bool process_echo(
     struct telos_error **error
 )
 {
-    return telos_plugin_process_request(
+    return telos_plugin_process_execute_tool(
         tool_process,
-        "echo",
+        "dev.zevorn.process-echo",
         arguments,
         1000,
         context->cancel,
@@ -112,14 +112,22 @@ static bool provider_dispatch(
         telos_value_release(arguments);
         telos_value_release(text);
     } else {
-        const struct telos_value *item = telos_value_at(request->items, 0);
-        const struct telos_value *output = telos_value_get(item, "output");
+        const struct telos_value *item = telos_value_at(request->items, 1);
+        const char *output = telos_value_string(
+            telos_value_get(item, "output")
+        );
+        struct telos_value *parsed = telos_value_parse_json(
+            output,
+            strlen(output),
+            NULL
+        );
 
-        assert(telos_value_count(request->items) == 1);
+        assert(telos_value_count(request->items) == 2);
         assert(strcmp(
-            telos_value_string(telos_value_get(output, "text")),
+            telos_value_string(telos_value_get(parsed, "text")),
             "from-process"
         ) == 0);
+        telos_value_release(parsed);
         event.kind = TELOS_PROVIDER_TEXT_DELTA;
         event.delta = "process tool completed";
         assert(emit(&event, emit_context, error));
@@ -208,8 +216,13 @@ int main(int argc, char **argv)
     struct telos_event *started;
     struct telos_event *completed;
 
-    assert(argc == 2);
-    tool_process = telos_plugin_process_spawn(argv[1], &error);
+    assert(argc == 3);
+    tool_process = telos_plugin_process_spawn_plugin(
+        argv[1],
+        argv[2],
+        "dev.zevorn.process-fixture",
+        &error
+    );
     assert(tool_process != NULL);
     prompt = telos_prompt_snapshot_create(fragments, 2, &error);
     assert(prompt != NULL);

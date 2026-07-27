@@ -7,4 +7,6 @@ bool telos_sha256_file(const char *path, char output[65]);
 
 bool telos_sha256_directory(const char *path, char output[65]);
 
+bool telos_sha256_source_directory(const char *path, char output[65]);
+
 #endif

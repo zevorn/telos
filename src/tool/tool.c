@@ -60,6 +60,32 @@ struct telos_capability_broker *telos_capability_broker_create(
         );
         return NULL;
     }
+    if (
+        available_capability_count
+        > SIZE_MAX / sizeof(*broker->capabilities)
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Capability Broker size overflow"
+        );
+        return NULL;
+    }
+    for (size_t index = 0; index < available_capability_count; ++index) {
+        if (
+            available_capabilities[index] == NULL
+            || available_capabilities[index][0] == '\0'
+        ) {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_ARGUMENT,
+                EINVAL,
+                "Capability names must not be empty"
+            );
+            return NULL;
+        }
+    }
     broker = calloc(1, sizeof(*broker));
     if (broker == NULL) {
         set_error(
@@ -71,19 +97,6 @@ struct telos_capability_broker *telos_capability_broker_create(
         return NULL;
     }
     if (available_capability_count > 0) {
-        if (
-            available_capability_count
-            > SIZE_MAX / sizeof(*broker->capabilities)
-        ) {
-            free(broker);
-            set_error(
-                error,
-                TELOS_ERROR_DOMAIN_MEMORY,
-                ENOMEM,
-                "Capability Broker size overflow"
-            );
-            return NULL;
-        }
         broker->capabilities = calloc(
             available_capability_count,
             sizeof(*broker->capabilities)

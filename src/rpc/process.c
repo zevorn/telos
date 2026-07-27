@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -67,8 +68,10 @@ static struct telos_value *request_message(
     return message;
 }
 
-struct telos_plugin_process *telos_plugin_process_spawn(
+static struct telos_plugin_process *spawn_process(
     const char *host_path,
+    const char *plugin_path,
+    const char *plugin_id,
     struct telos_error **error
 )
 {
@@ -79,7 +82,13 @@ struct telos_plugin_process *telos_plugin_process_spawn(
     if (error != NULL) {
         *error = NULL;
     }
-    if (host_path == NULL || host_path[0] == '\0') {
+    if (
+        host_path == NULL
+        || host_path[0] == '\0'
+        || ((plugin_path == NULL) != (plugin_id == NULL))
+        || (plugin_path != NULL && plugin_path[0] == '\0')
+        || (plugin_id != NULL && plugin_id[0] == '\0')
+    ) {
         set_error(
             error,
             TELOS_ERROR_DOMAIN_ARGUMENT,
@@ -119,7 +128,17 @@ struct telos_plugin_process *telos_plugin_process_spawn(
             _exit(126);
         }
         close(sockets[1]);
-        execl(host_path, host_path, (char *)NULL);
+        if (plugin_path == NULL) {
+            execl(host_path, host_path, (char *)NULL);
+        } else {
+            execl(
+                host_path,
+                host_path,
+                plugin_path,
+                plugin_id,
+                (char *)NULL
+            );
+        }
         _exit(127);
     }
     close(sockets[1]);
@@ -155,6 +174,34 @@ struct telos_plugin_process *telos_plugin_process_spawn(
     return process;
 }
 
+struct telos_plugin_process *telos_plugin_process_spawn(
+    const char *host_path,
+    struct telos_error **error
+)
+{
+    return spawn_process(host_path, NULL, NULL, error);
+}
+
+struct telos_plugin_process *telos_plugin_process_spawn_plugin(
+    const char *host_path,
+    const char *plugin_path,
+    const char *plugin_id,
+    struct telos_error **error
+)
+{
+    return spawn_process(host_path, plugin_path, plugin_id, error);
+}
+
+static void stop_failed_process(struct telos_plugin_process *process)
+{
+    if (process->child > 0) {
+        kill(-process->child, SIGKILL);
+        waitpid(process->child, NULL, 0);
+        process->child = 0;
+    }
+    process->stopped = true;
+}
+
 static bool response_ready(
     struct telos_plugin_process *process,
     unsigned int timeout_milliseconds,
@@ -172,7 +219,62 @@ static bool response_ready(
         int poll_result = poll(&descriptor, 1, 10);
 
         if (poll_result > 0) {
-            return true;
+            int available = 0;
+            unsigned char length[4];
+
+            if (ioctl(process->output, FIONREAD, &available) != 0) {
+                set_error(
+                    error,
+                    TELOS_ERROR_DOMAIN_IO,
+                    errno,
+                    "Plugin Host response size could not be inspected"
+                );
+                return false;
+            }
+            if (available >= 4) {
+                ssize_t peeked = recv(
+                    process->output,
+                    length,
+                    sizeof(length),
+                    MSG_PEEK | MSG_DONTWAIT
+                );
+                uint32_t payload_size;
+
+                if (
+                    peeked < 0
+                    && errno != EINTR
+                    && errno != EAGAIN
+                    && errno != EWOULDBLOCK
+                ) {
+                    set_error(
+                        error,
+                        TELOS_ERROR_DOMAIN_IO,
+                        errno,
+                        "Plugin Host response header could not be inspected"
+                    );
+                    return false;
+                }
+                if (peeked == 4) {
+                    payload_size = ((uint32_t)length[0] << 24)
+                        | ((uint32_t)length[1] << 16)
+                        | ((uint32_t)length[2] << 8)
+                        | (uint32_t)length[3];
+                    if (
+                        payload_size == 0
+                        || payload_size > TELOS_RPC_MAX_FRAME_SIZE
+                        || (uint64_t)available
+                            >= (uint64_t)payload_size + 4
+                    ) {
+                        return true;
+                    }
+                }
+            }
+            if (
+                (descriptor.revents & POLLHUP) != 0
+                && available < 4
+            ) {
+                return true;
+            }
         }
         if (poll_result < 0 && errno != EINTR) {
             set_error(
@@ -295,6 +397,7 @@ bool telos_plugin_process_request(
         cancel,
         error
     )) {
+        stop_failed_process(process);
         goto cleanup;
     }
     response = telos_rpc_read_frame(
@@ -309,6 +412,17 @@ bool telos_plugin_process_request(
     }
     response_type = telos_value_string(telos_value_get(response, "type"));
     body_value = telos_value_get(response, "body");
+    if (response_type != NULL && strcmp(response_type, "error") == 0) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_PLUGIN,
+            EIO,
+            telos_value_string(body_value) == NULL
+                ? "Plugin Host rejected the request"
+                : telos_value_string(body_value)
+        );
+        goto cleanup;
+    }
     snprintf(expected, sizeof(expected), "%s.result", type);
     if (
         response_type == NULL
@@ -330,6 +444,56 @@ cleanup:
     telos_value_release(response);
     pthread_mutex_unlock(&process->mutex);
     telos_value_release(request);
+    return result;
+}
+
+bool telos_plugin_process_execute_tool(
+    struct telos_plugin_process *process,
+    const char *tool_id,
+    const struct telos_value *arguments,
+    unsigned int timeout_milliseconds,
+    const struct telos_cancel *cancel,
+    struct telos_value **response_body,
+    struct telos_error **error
+)
+{
+    struct telos_value *id = telos_value_new_string(tool_id);
+    const char *keys[] = {"id", "arguments"};
+    const struct telos_value *values[] = {id, arguments};
+    struct telos_value *body = NULL;
+    bool result;
+
+    if (
+        tool_id != NULL
+        && tool_id[0] != '\0'
+        && arguments != NULL
+        && id != NULL
+    ) {
+        body = telos_value_new_object(keys, values, 2);
+    }
+    telos_value_release(id);
+    if (body == NULL) {
+        if (response_body != NULL) {
+            *response_body = NULL;
+        }
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Process Tool execution arguments are invalid"
+        );
+        return false;
+    }
+    result = telos_plugin_process_request(
+        process,
+        "tool.execute",
+        body,
+        timeout_milliseconds,
+        cancel,
+        response_body,
+        error
+    );
+    telos_value_release(body);
     return result;
 }
 
@@ -392,7 +556,10 @@ void telos_plugin_process_destroy(struct telos_plugin_process *process)
         return;
     }
     close(process->input);
-    if (waitpid(process->child, &status, WNOHANG) == 0) {
+    if (
+        process->child > 0
+        && waitpid(process->child, &status, WNOHANG) == 0
+    ) {
         kill(-process->child, SIGKILL);
         waitpid(process->child, &status, 0);
     }

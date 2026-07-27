@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <telos/resource.h>
 
@@ -57,10 +58,9 @@ static char *copy_range(const char *start, size_t size)
     if (size == SIZE_MAX) {
         return NULL;
     }
-    copy = malloc(size + 1);
+    copy = calloc(size + 1, 1);
     if (copy != NULL) {
         memcpy(copy, start, size);
-        copy[size] = '\0';
     }
     return copy;
 }
@@ -125,7 +125,7 @@ static char *read_file(
         );
         return NULL;
     }
-    content = malloc((size_t)length + 1);
+    content = calloc((size_t)length + 1, 1);
     if (
         content == NULL
         || fread(content, 1, (size_t)length, file) != (size_t)length
@@ -142,7 +142,6 @@ static char *read_file(
         );
         return NULL;
     }
-    content[length] = '\0';
     fclose(file);
     return content;
 }
@@ -435,7 +434,9 @@ static bool list_directories(
         *count += 1;
     }
     closedir(directory);
-    qsort(*names, *count, sizeof(**names), compare_strings);
+    if (*count > 1) {
+        qsort(*names, *count, sizeof(**names), compare_strings);
+    }
     return true;
 }
 
@@ -576,6 +577,17 @@ struct telos_resource_manager *telos_resource_manager_create(
             "Skill roots are invalid"
         );
         return NULL;
+    }
+    for (size_t index = 0; index < skill_root_count; ++index) {
+        if (skill_roots[index] == NULL || skill_roots[index][0] == '\0') {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_ARGUMENT,
+                EINVAL,
+                "Skill root paths must not be empty"
+            );
+            return NULL;
+        }
     }
     manager = calloc(1, sizeof(*manager));
     if (manager == NULL) {
@@ -874,7 +886,12 @@ static bool relative_path_safe(const char *path)
 {
     const char *cursor = path;
 
-    if (path == NULL || path[0] == '\0' || path[0] == '/') {
+    if (
+        path == NULL
+        || path[0] == '\0'
+        || path[0] == '/'
+        || path[strlen(path) - 1] == '/'
+    ) {
         return false;
     }
     while (*cursor != '\0') {
@@ -949,6 +966,79 @@ char *telos_skill_resolve_path(
             TELOS_ERROR_DOMAIN_PERMISSION,
             EPERM,
             "Skill path escaped the Skill directory"
+        );
+        return NULL;
+    }
+    return resolved;
+}
+
+char *telos_skill_resolve_script(
+    const struct telos_skill *skill,
+    const char *relative_path,
+    const char *const *available_capabilities,
+    size_t available_capability_count,
+    struct telos_error **error
+)
+{
+    bool can_spawn = false;
+    char *resolved;
+    struct stat status;
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (
+        available_capability_count > 0
+        && available_capabilities == NULL
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Script Capability list is invalid"
+        );
+        return NULL;
+    }
+    for (size_t index = 0; index < available_capability_count; ++index) {
+        if (
+            available_capabilities[index] != NULL
+            && strcmp(
+                available_capabilities[index],
+                "process.spawn"
+            ) == 0
+        ) {
+            can_spawn = true;
+            break;
+        }
+    }
+    if (
+        !can_spawn
+        || relative_path == NULL
+        || strncmp(relative_path, "scripts/", 8) != 0
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_PERMISSION,
+            EACCES,
+            "Skill script requires the process.spawn Capability"
+        );
+        return NULL;
+    }
+    resolved = telos_skill_resolve_path(skill, relative_path, error);
+    if (resolved == NULL) {
+        return NULL;
+    }
+    if (
+        stat(resolved, &status) != 0
+        || !S_ISREG(status.st_mode)
+        || access(resolved, X_OK) != 0
+    ) {
+        free(resolved);
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_PERMISSION,
+            EACCES,
+            "Skill script is not executable"
         );
         return NULL;
     }

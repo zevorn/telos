@@ -1,7 +1,7 @@
 telos_plugin_host = executable(
     'telos-plugin-host',
     'telos-plugin-host/main.c',
-    dependencies: telos_rpc_dep,
+    dependencies: telos_dep,
     install: true,
 )
 
@@ -24,3 +24,14 @@ telos_build = executable(
     'telos-build/main.c',
     install: true,
 )
+
+if get_option('openai_smoke')
+    curl_dep = dependency('libcurl', required: true)
+
+    executable(
+        'telos-openai-smoke',
+        'telos-openai-smoke/main.c',
+        dependencies: [telos_dep, curl_dep],
+        install: true,
+    )
+endif

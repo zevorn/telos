@@ -20,4 +20,12 @@ config TELOS_NETWORK
     help
       Enable the platform networking surface used by Provider Plugins.
 
+config TELOS_NETWORK_PROBE_IPV4
+    string "Telos scenario IPv4 probe endpoint"
+    default "10.0.2.3"
+    depends on TELOS_NETWORK && NET_IPV4 && NET_SOCKETS
+    help
+      IPv4 DNS endpoint used by the deterministic network scenario. QEMU
+      user networking exposes its DNS service at 10.0.2.3.
+
 endif

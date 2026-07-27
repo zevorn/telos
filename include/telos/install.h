@@ -34,6 +34,12 @@ enum telos_builder_backend {
     TELOS_BUILDER_CONTAINER,
 };
 
+enum telos_install_goal {
+    TELOS_INSTALL_GOAL_INSTALL = 0,
+    TELOS_INSTALL_GOAL_BUILD,
+    TELOS_INSTALL_GOAL_TEST,
+};
+
 struct telos_install_risk {
     bool git_source;
     bool native_build;
@@ -41,6 +47,7 @@ struct telos_install_risk {
     bool filesystem_write;
     bool process_spawn;
     bool secret_use;
+    bool unlocked_source;
     size_t permission_count;
     bool requires_approval;
 };
@@ -61,8 +68,10 @@ struct telos_install_options {
     const char *sdk_pkgconfig_path;
     const char *sdk_sysroot;
     const char *abi_check_path;
+    const char *plugin_host_path;
     const char *container_image;
     enum telos_builder_backend builder;
+    enum telos_install_goal goal;
     unsigned int timeout_seconds;
     telos_install_approve_fn approve;
     void *approve_context;
@@ -86,6 +95,19 @@ bool telos_plugin_install(
 );
 
 bool telos_plugin_rollback(
+    const char *state_directory,
+    const char *plugin_id,
+    struct telos_error **error
+);
+
+bool telos_plugin_activate(
+    const char *state_directory,
+    const char *plugin_id,
+    const char *cache_key,
+    struct telos_error **error
+);
+
+bool telos_plugin_remove(
     const char *state_directory,
     const char *plugin_id,
     struct telos_error **error

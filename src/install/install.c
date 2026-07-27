@@ -510,9 +510,12 @@ static bool permission_contains(
 static struct telos_install_risk inspect_risk(
     const struct telos_install_options *options,
     const struct telos_plugin_manifest *manifest,
+    const struct telos_plugin_lock *lock,
     bool git_source
 )
 {
+    static const char unlocked_hash[] =
+        "0000000000000000000000000000000000000000000000000000000000000000";
     struct telos_install_risk risk = {
         .git_source = git_source,
         .native_build = options->builder == TELOS_BUILDER_NATIVE,
@@ -523,6 +526,10 @@ static struct telos_install_risk inspect_risk(
         ),
         .process_spawn = permission_contains(manifest, "process.spawn"),
         .secret_use = permission_contains(manifest, "secret.use"),
+        .unlocked_source = strcmp(
+            telos_plugin_lock_source_hash(lock),
+            unlocked_hash
+        ) == 0,
         .permission_count = telos_plugin_manifest_permission_count(manifest),
     };
 
@@ -531,7 +538,8 @@ static struct telos_install_risk inspect_risk(
         || risk.network
         || risk.filesystem_write
         || risk.process_spawn
-        || risk.secret_use;
+        || risk.secret_use
+        || risk.unlocked_source;
     return risk;
 }
 
@@ -656,6 +664,9 @@ static bool copy_file(
     unsigned char buffer[8192];
     size_t received;
     bool valid = true;
+    bool input_failed;
+    bool input_close_failed;
+    bool output_close_failed;
 
     if (input == NULL) {
         set_error(
@@ -677,13 +688,23 @@ static bool copy_file(
         );
         return false;
     }
-    while ((received = fread(buffer, 1, sizeof(buffer), input)) > 0) {
-        if (fwrite(buffer, 1, received, output) != received) {
+    for (;;) {
+        received = fread(buffer, 1, sizeof(buffer), input);
+        if (
+            received > 0
+            && fwrite(buffer, 1, received, output) != received
+        ) {
             valid = false;
             break;
         }
+        if (ferror(input) != 0 || feof(input) != 0) {
+            break;
+        }
     }
-    if (ferror(input) || fclose(input) != 0 || fclose(output) != 0) {
+    input_failed = ferror(input) != 0;
+    input_close_failed = fclose(input) != 0;
+    output_close_failed = fclose(output) != 0;
+    if (input_failed || input_close_failed || output_close_failed) {
         valid = false;
     }
     if (!valid) {
@@ -799,7 +820,7 @@ static bool replace_link(
     return true;
 }
 
-static bool activate(
+static bool activate_cache_entry(
     const char *state_directory,
     const char *plugin_id,
     const char *cache_entry,
@@ -1062,7 +1083,6 @@ static bool build_plugin(
                 return false;
             }
         }
-        progress(options, TELOS_INSTALL_HEALTH_CHECK);
         return true;
     }
     progress(options, TELOS_INSTALL_BUILD);
@@ -1149,8 +1169,37 @@ static bool build_plugin(
             return false;
         }
     }
-    progress(options, TELOS_INSTALL_HEALTH_CHECK);
     return true;
+}
+
+static bool health_check_plugin(
+    const struct telos_install_options *options,
+    const struct telos_cancel *cancel,
+    const char *working_directory,
+    const char *log_path,
+    const char *artifact,
+    const char *plugin_id,
+    struct telos_error **error
+)
+{
+    const char *arguments[] = {
+        options->plugin_host_path,
+        "--health-check",
+        artifact,
+        plugin_id,
+        NULL,
+    };
+
+    progress(options, TELOS_INSTALL_HEALTH_CHECK);
+    return run_process(
+        working_directory,
+        log_path,
+        NULL,
+        arguments,
+        options->timeout_seconds,
+        cancel,
+        error
+    );
 }
 
 bool telos_plugin_install(
@@ -1199,7 +1248,14 @@ bool telos_plugin_install(
         || options->sdk_pkgconfig_path == NULL
         || options->sdk_sysroot == NULL
         || options->abi_check_path == NULL
-        || options->builder == 0
+        || options->plugin_host_path == NULL
+        || options->plugin_host_path[0] == '\0'
+        || (
+            options->builder != TELOS_BUILDER_NATIVE
+            && options->builder != TELOS_BUILDER_CONTAINER
+        )
+        || options->goal < TELOS_INSTALL_GOAL_INSTALL
+        || options->goal > TELOS_INSTALL_GOAL_TEST
         || realpath(options->state_directory, state_directory) == NULL
     ) {
         set_error(
@@ -1326,7 +1382,7 @@ bool telos_plugin_install(
         goto cleanup;
     }
     progress(options, TELOS_INSTALL_PLAN);
-    risk = inspect_risk(options, manifest, git_source);
+    risk = inspect_risk(options, manifest, lock, git_source);
     progress(options, TELOS_INSTALL_AUTHORIZE);
     if (
         risk.requires_approval
@@ -1344,7 +1400,17 @@ bool telos_plugin_install(
         goto cleanup;
     }
     progress(options, TELOS_INSTALL_VERIFY_DEPENDENCIES);
-    if (!telos_plugin_lock_verify(lock, source_directory, error)) {
+    if (
+        !telos_plugin_lock_verify(lock, source_directory, error)
+        || (
+            !risk.unlocked_source
+            && !telos_plugin_lock_verify_source(
+                lock,
+                source_directory,
+                error
+            )
+        )
+    ) {
         goto cleanup;
     }
 
@@ -1449,15 +1515,29 @@ bool telos_plugin_install(
         }
     }
 
-    progress(options, TELOS_INSTALL_ACTIVATE);
-    if (!activate(
-        state_directory,
+    if (!health_check_plugin(
+        options,
+        cancel,
+        source_directory,
+        log_path,
+        artifact,
         telos_plugin_manifest_id(manifest),
-        cache_entry,
         error
     )) {
-        progress(options, TELOS_INSTALL_ROLLBACK);
         goto cleanup;
+    }
+
+    if (options->goal == TELOS_INSTALL_GOAL_INSTALL) {
+        progress(options, TELOS_INSTALL_ACTIVATE);
+        if (!activate_cache_entry(
+            state_directory,
+            telos_plugin_manifest_id(manifest),
+            cache_entry,
+            error
+        )) {
+            progress(options, TELOS_INSTALL_ROLLBACK);
+            goto cleanup;
+        }
     }
     progress(options, TELOS_INSTALL_COMMIT);
     result->plugin_id = copy_text(telos_plugin_manifest_id(manifest));
@@ -1493,6 +1573,129 @@ cleanup:
         remove_tree(quarantine);
     }
     return success;
+}
+
+static bool cache_key_valid(const char *cache_key)
+{
+    if (cache_key == NULL || strlen(cache_key) != 64) {
+        return false;
+    }
+    for (size_t index = 0; index < 64; ++index) {
+        if (
+            !((cache_key[index] >= '0' && cache_key[index] <= '9')
+                || (cache_key[index] >= 'a' && cache_key[index] <= 'f'))
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool telos_plugin_activate(
+    const char *state_directory,
+    const char *plugin_id,
+    const char *cache_key,
+    struct telos_error **error
+)
+{
+    char canonical_state[PATH_BUFFER_SIZE];
+    char cache_entry[PATH_BUFFER_SIZE];
+    char staged[PATH_BUFFER_SIZE];
+    char artifact[PATH_BUFFER_SIZE];
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (
+        state_directory == NULL
+        || plugin_id == NULL
+        || plugin_id[0] == '\0'
+        || strchr(plugin_id, '/') != NULL
+        || !cache_key_valid(cache_key)
+        || realpath(state_directory, canonical_state) == NULL
+        || snprintf(
+            cache_entry,
+            sizeof(cache_entry),
+            "%s/cache/plugins/%s",
+            canonical_state,
+            cache_key
+        ) >= (int)sizeof(cache_entry)
+        || !path_join(staged, sizeof(staged), cache_entry, "staged")
+        || !find_artifact_recursive(staged, artifact, sizeof(artifact))
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Plugin activation target is invalid or unavailable"
+        );
+        return false;
+    }
+    return activate_cache_entry(
+        canonical_state,
+        plugin_id,
+        cache_entry,
+        error
+    );
+}
+
+bool telos_plugin_remove(
+    const char *state_directory,
+    const char *plugin_id,
+    struct telos_error **error
+)
+{
+    char canonical_state[PATH_BUFFER_SIZE];
+    char plugin_directory[PATH_BUFFER_SIZE];
+    struct stat status;
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (
+        state_directory == NULL
+        || plugin_id == NULL
+        || plugin_id[0] == '\0'
+        || strchr(plugin_id, '/') != NULL
+        || realpath(state_directory, canonical_state) == NULL
+        || snprintf(
+            plugin_directory,
+            sizeof(plugin_directory),
+            "%s/plugins/%s",
+            canonical_state,
+            plugin_id
+        ) >= (int)sizeof(plugin_directory)
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Plugin removal arguments are invalid"
+        );
+        return false;
+    }
+    if (lstat(plugin_directory, &status) != 0) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_STATE,
+            ENOENT,
+            "Plugin is not installed"
+        );
+        return false;
+    }
+    errno = 0;
+    if (!remove_tree(plugin_directory)) {
+        int saved_errno = errno;
+
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_IO,
+            saved_errno == 0 ? EIO : saved_errno,
+            "Plugin activation could not be removed"
+        );
+        return false;
+    }
+    return true;
 }
 
 bool telos_plugin_rollback(

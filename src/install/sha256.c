@@ -202,6 +202,8 @@ bool telos_sha256_file(const char *path, char output[65])
     unsigned char digest[32];
     FILE *stream;
     size_t received;
+    bool read_failed;
+    bool close_failed;
 
     if (path == NULL || output == NULL) {
         return false;
@@ -211,10 +213,18 @@ bool telos_sha256_file(const char *path, char output[65])
         return false;
     }
     initialize(&context);
-    while ((received = fread(buffer, 1, sizeof(buffer), stream)) > 0) {
-        update(&context, buffer, received);
+    for (;;) {
+        received = fread(buffer, 1, sizeof(buffer), stream);
+        if (received > 0) {
+            update(&context, buffer, received);
+        }
+        if (ferror(stream) != 0 || feof(stream) != 0) {
+            break;
+        }
     }
-    if (ferror(stream) || fclose(stream) != 0) {
+    read_failed = ferror(stream) != 0;
+    close_failed = fclose(stream) != 0;
+    if (read_failed || close_failed) {
         return false;
     }
     finish(&context, digest);
@@ -242,14 +252,24 @@ static bool hash_file_content(
     unsigned char buffer[8192];
     FILE *stream = fopen(path, "rb");
     size_t received;
+    bool read_failed;
+    bool close_failed;
 
     if (stream == NULL) {
         return false;
     }
-    while ((received = fread(buffer, 1, sizeof(buffer), stream)) > 0) {
-        update(context, buffer, received);
+    for (;;) {
+        received = fread(buffer, 1, sizeof(buffer), stream);
+        if (received > 0) {
+            update(context, buffer, received);
+        }
+        if (ferror(stream) != 0 || feof(stream) != 0) {
+            break;
+        }
     }
-    if (ferror(stream) || fclose(stream) != 0) {
+    read_failed = ferror(stream) != 0;
+    close_failed = fclose(stream) != 0;
+    if (read_failed || close_failed) {
         return false;
     }
     return true;
@@ -266,7 +286,8 @@ static void free_names(char **names, size_t count)
 static bool hash_directory_recursive(
     struct sha256_context *context,
     const char *root,
-    const char *relative
+    const char *relative,
+    bool source_mode
 )
 {
     char directory_path[4096];
@@ -302,6 +323,16 @@ static bool hash_directory_recursive(
             || strcmp(entry->d_name, "..") == 0
             || strcmp(entry->d_name, ".git") == 0
             || strcmp(entry->d_name, "build") == 0
+            || (
+                source_mode
+                && (
+                    strcmp(entry->d_name, "telos.lock") == 0
+                    || strcmp(
+                        entry->d_name,
+                        ".telos-build-input"
+                    ) == 0
+                )
+            )
         ) {
             continue;
         }
@@ -332,7 +363,9 @@ static bool hash_directory_recursive(
         free_names(names, count);
         return false;
     }
-    qsort(names, count, sizeof(*names), compare_names);
+    if (count > 1) {
+        qsort(names, count, sizeof(*names), compare_names);
+    }
 
     for (size_t index = 0; index < count; ++index) {
         char child_relative[4096];
@@ -371,7 +404,12 @@ static bool hash_directory_recursive(
             const unsigned char kind = 'd';
 
             update(context, &kind, 1);
-            if (!hash_directory_recursive(context, root, child_relative)) {
+            if (!hash_directory_recursive(
+                context,
+                root,
+                child_relative,
+                source_mode
+            )) {
                 result = false;
                 break;
             }
@@ -392,7 +430,11 @@ static bool hash_directory_recursive(
     return result;
 }
 
-bool telos_sha256_directory(const char *path, char output[65])
+static bool hash_directory(
+    const char *path,
+    char output[65],
+    bool source_mode
+)
 {
     static const char digits[] = "0123456789abcdef";
     struct sha256_context context;
@@ -408,7 +450,7 @@ bool telos_sha256_directory(const char *path, char output[65])
         return false;
     }
     initialize(&context);
-    if (!hash_directory_recursive(&context, path, "")) {
+    if (!hash_directory_recursive(&context, path, "", source_mode)) {
         return false;
     }
     finish(&context, digest);
@@ -418,4 +460,14 @@ bool telos_sha256_directory(const char *path, char output[65])
     }
     output[64] = '\0';
     return true;
+}
+
+bool telos_sha256_directory(const char *path, char output[65])
+{
+    return hash_directory(path, output, false);
+}
+
+bool telos_sha256_source_directory(const char *path, char output[65])
+{
+    return hash_directory(path, output, true);
 }

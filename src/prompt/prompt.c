@@ -224,12 +224,14 @@ struct telos_prompt_snapshot *telos_prompt_snapshot_create(
         }
         ordered[index] = &fragments[index];
     }
-    qsort(
-        ordered,
-        fragment_count,
-        sizeof(*ordered),
-        compare_fragments
-    );
+    if (fragment_count > 1) {
+        qsort(
+            ordered,
+            fragment_count,
+            sizeof(*ordered),
+            compare_fragments
+        );
+    }
 
     if (
         !buffer_text(&buffer, "# KERNEL CONTRACT\n\n")
@@ -401,7 +403,7 @@ static char *read_optional_guidance(
         );
         return NULL;
     }
-    content = malloc((size_t)length + 1);
+    content = calloc((size_t)length + 1, 1);
     if (
         content == NULL
         || fread(content, 1, (size_t)length, file) != (size_t)length
@@ -418,7 +420,6 @@ static char *read_optional_guidance(
         );
         return NULL;
     }
-    content[length] = '\0';
     fclose(file);
     return content;
 }

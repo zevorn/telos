@@ -27,3 +27,10 @@ option(
     value: true,
     description: 'Build Linux shared Plugin support',
 )
+
+option(
+    'openai_smoke',
+    type: 'boolean',
+    value: false,
+    description: 'Build the credentialed OpenAI Responses smoke utility',
+)

@@ -51,15 +51,18 @@ static char *read_fixture(const char *path, size_t *size)
     long length;
     char *content;
 
+    if (file == NULL) {
+        return NULL;
+    }
     if (
-        file == NULL
-        || fseek(file, 0, SEEK_END) != 0
+        fseek(file, 0, SEEK_END) != 0
         || (length = ftell(file)) < 0
         || fseek(file, 0, SEEK_SET) != 0
     ) {
+        fclose(file);
         return NULL;
     }
-    content = malloc((size_t)length);
+    content = malloc((size_t)length + 1);
     if (
         content == NULL
         || fread(content, 1, (size_t)length, file) != (size_t)length
@@ -68,7 +71,11 @@ static char *read_fixture(const char *path, size_t *size)
         fclose(file);
         return NULL;
     }
-    fclose(file);
+    content[(size_t)length] = '\0';
+    if (fclose(file) != 0) {
+        free(content);
+        return NULL;
+    }
     *size = (size_t)length;
     return content;
 }

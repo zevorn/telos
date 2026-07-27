@@ -49,7 +49,10 @@ int main(void)
     char metadata_path[512];
     char reference_directory[512];
     char reference_path[512];
+    char script_directory[512];
+    char script_path[512];
     const char *roots[] = {root};
+    const char *script_capabilities[] = {"process.spawn"};
     struct telos_resource_manager *manager;
     struct telos_resource_generation *first;
     struct telos_resource_generation *second;
@@ -92,9 +95,22 @@ int main(void)
             reference_directory,
             "guide.md"
         )
+        || !join_path(
+            script_directory,
+            sizeof(script_directory),
+            skill_directory,
+            "scripts"
+        )
+        || !join_path(
+            script_path,
+            sizeof(script_path),
+            script_directory,
+            "deploy.sh"
+        )
         || mkdir(skill_directory, 0700) != 0
         || mkdir(agents_directory, 0700) != 0
         || mkdir(reference_directory, 0700) != 0
+        || mkdir(script_directory, 0700) != 0
         || !write_text(
             skill_path,
             "---\n"
@@ -108,6 +124,8 @@ int main(void)
             "policy:\n  allow_implicit_invocation: true\n"
         )
         || !write_text(reference_path, "# Deployment guide\n")
+        || !write_text(script_path, "#!/bin/sh\nexit 0\n")
+        || chmod(script_path, 0700) != 0
     ) {
         return 1;
     }
@@ -136,6 +154,23 @@ int main(void)
         ) != NULL
         && telos_skill_has_openai_metadata(selected)
         && resolved != NULL;
+    telos_resource_string_free(resolved);
+    resolved = telos_skill_resolve_script(
+        selected,
+        "scripts/deploy.sh",
+        NULL,
+        0,
+        NULL
+    );
+    passed = passed && resolved == NULL;
+    resolved = telos_skill_resolve_script(
+        selected,
+        "scripts/deploy.sh",
+        script_capabilities,
+        1,
+        NULL
+    );
+    passed = passed && resolved != NULL;
     telos_resource_string_free(resolved);
 
     passed = passed && write_text(
@@ -176,9 +211,11 @@ int main(void)
     telos_resource_generation_release(first);
     telos_resource_manager_destroy(manager);
     unlink(reference_path);
+    unlink(script_path);
     unlink(metadata_path);
     unlink(skill_path);
     rmdir(reference_directory);
+    rmdir(script_directory);
     rmdir(agents_directory);
     rmdir(skill_directory);
     rmdir(root);

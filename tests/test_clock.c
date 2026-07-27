@@ -35,6 +35,13 @@ int main(void)
     assert(telos_error_domain(error) == TELOS_ERROR_DOMAIN_ARGUMENT);
     assert(telos_error_code(error) == EINVAL);
     telos_error_release(error);
+    error = NULL;
+    clock.now = NULL;
+    assert(!telos_clock_now_milliseconds(&clock, &actual, &error));
+    assert(error != NULL);
+    telos_error_release(error);
+    error = NULL;
+    assert(!telos_clock_now_milliseconds(&clock, &actual, NULL));
 
     clock = telos_system_clock();
     assert(telos_clock_now_milliseconds(&clock, &actual, &error));

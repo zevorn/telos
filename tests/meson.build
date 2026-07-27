@@ -111,6 +111,14 @@ if get_option('tests')
 
     test('session-actor', test_session_actor)
 
+    test_actor_invalid = executable(
+        'test-actor-invalid',
+        'test_actor_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('actor-invalid', test_actor_invalid)
+
     test_session_retry = executable(
         'test-session-retry',
         'test_session_retry.c',
@@ -135,6 +143,14 @@ if get_option('tests')
 
     test('session-failure', test_session_failure)
 
+    test_session_invalid = executable(
+        'test-session-invalid',
+        'test_session_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('session-invalid', test_session_invalid)
+
     test_state_fragment = executable(
         'test-state-fragment',
         'test_state_fragment.c',
@@ -158,6 +174,14 @@ if get_option('tests')
     )
 
     test('ring-store', test_ring_store)
+
+    test_store_invalid = executable(
+        'test-store-invalid',
+        'test_store_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('store-invalid', test_store_invalid)
 
     test_value_json = executable(
         'test-value-json',
@@ -207,6 +231,34 @@ if get_option('tests')
 
     test('trace', test_trace)
 
+    test_base_invalid = executable(
+        'test-base-invalid',
+        'test_base_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('base-invalid', test_base_invalid)
+
+    test_allocation_failures = executable(
+        'test-allocation-failures',
+        'test_allocation_failures.c',
+        dependencies: telos_dep,
+        link_args: [
+            '-Wl,--wrap=malloc',
+            '-Wl,--wrap=calloc',
+            '-Wl,--wrap=realloc',
+        ],
+    )
+
+    test(
+        'allocation-failure-matrix',
+        test_allocation_failures,
+        args: [
+            meson.project_source_root() / 'sdk/templates/tool/plugin.toml',
+            meson.project_source_root() / 'sdk/templates/tool/telos.lock',
+        ],
+    )
+
     test_markdown_store = executable(
         'test-markdown-store',
         'test_markdown_store.c',
@@ -223,6 +275,14 @@ if get_option('tests')
 
     test('markdown-store-partial', test_markdown_store_partial)
 
+    test_markdown_invalid = executable(
+        'test-markdown-invalid',
+        'test_markdown_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('markdown-invalid', test_markdown_invalid)
+
     test_registry = executable(
         'test-registry',
         'test_registry.c',
@@ -238,6 +298,14 @@ if get_option('tests')
     )
 
     test('registry-atomic', test_registry_atomic)
+
+    test_registry_invalid = executable(
+        'test-registry-invalid',
+        'test_registry_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('registry-invalid', test_registry_invalid)
 
     test_plugin_lifecycle = executable(
         'test-plugin-lifecycle',
@@ -270,6 +338,27 @@ if get_option('tests')
         name_prefix: '',
     )
 
+    fixture_plugin_process = shared_module(
+        'fixture-plugin-process',
+        'fixtures/plugin_process_echo.c',
+        include_directories: inc_public,
+        name_prefix: '',
+    )
+
+    fixture_plugin_no_entry = shared_module(
+        'fixture-plugin-no-entry',
+        'fixtures/plugin_no_entry.c',
+        include_directories: inc_public,
+        name_prefix: '',
+    )
+
+    fixture_plugin_init_failure = shared_module(
+        'fixture-plugin-init-failure',
+        'fixtures/plugin_init_failure.c',
+        include_directories: inc_public,
+        name_prefix: '',
+    )
+
     test_plugin_loader = executable(
         'test-plugin-loader',
         'test_plugin_loader.c',
@@ -294,6 +383,27 @@ if get_option('tests')
         test_plugin_loader_abi,
         args: fixture_plugin_good.full_path(),
         depends: fixture_plugin_good,
+    )
+
+    test_plugin_loader_invalid = executable(
+        'test-plugin-loader-invalid',
+        'test_plugin_loader_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test(
+        'plugin-loader-invalid',
+        test_plugin_loader_invalid,
+        args: [
+            fixture_plugin_good.full_path(),
+            fixture_plugin_no_entry.full_path(),
+            fixture_plugin_init_failure.full_path(),
+        ],
+        depends: [
+            fixture_plugin_good,
+            fixture_plugin_no_entry,
+            fixture_plugin_init_failure,
+        ],
     )
 
     test_rpc_invalid = executable(
@@ -326,8 +436,14 @@ if get_option('tests')
     test(
         'plugin-process-failures',
         test_plugin_process,
-        args: telos_plugin_host.full_path(),
-        depends: telos_plugin_host,
+        args: [
+            telos_plugin_host.full_path(),
+            fixture_plugin_process.full_path(),
+        ],
+        depends: [
+            telos_plugin_host,
+            fixture_plugin_process,
+        ],
     )
 
     test_resource_skill = executable(
@@ -337,6 +453,14 @@ if get_option('tests')
     )
 
     test('resource-skill', test_resource_skill)
+
+    test_resource_invalid = executable(
+        'test-resource-invalid',
+        'test_resource_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('resource-invalid', test_resource_invalid)
 
     test_prompt = executable(
         'test-prompt',
@@ -353,6 +477,14 @@ if get_option('tests')
     )
 
     test('prompt-trust', test_prompt_trust)
+
+    test_prompt_invalid = executable(
+        'test-prompt-invalid',
+        'test_prompt_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('prompt-invalid', test_prompt_invalid)
 
     test_openai_request = executable(
         'test-openai-request',
@@ -394,6 +526,14 @@ if get_option('tests')
         args: meson.current_source_dir() / 'fixtures/responses.sse',
     )
 
+    test_provider_invalid = executable(
+        'test-provider-invalid',
+        'test_provider_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('provider-invalid', test_provider_invalid)
+
     test_tool_policy = executable(
         'test-tool-policy',
         'test_tool_policy.c',
@@ -410,6 +550,14 @@ if get_option('tests')
 
     test('tool-policy-denied', test_tool_policy_denied)
 
+    test_tool_invalid = executable(
+        'test-tool-invalid',
+        'test_tool_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('tool-invalid', test_tool_invalid)
+
     test_agent_loop = executable(
         'test-agent-loop',
         'test_agent_loop.c',
@@ -418,6 +566,14 @@ if get_option('tests')
 
     test('agent-loop', test_agent_loop)
 
+    test_agent_remote = executable(
+        'test-agent-remote',
+        'test_agent_remote.c',
+        dependencies: telos_dep,
+    )
+
+    test('agent-remote-state', test_agent_remote)
+
     test_agent_failures = executable(
         'test-agent-failures',
         'test_agent_failures.c',
@@ -425,6 +581,14 @@ if get_option('tests')
     )
 
     test('agent-failures', test_agent_failures)
+
+    test_agent_invalid = executable(
+        'test-agent-invalid',
+        'test_agent_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('agent-invalid', test_agent_invalid)
 
     test_secret = executable(
         'test-secret',
@@ -460,6 +624,14 @@ if get_option('tests')
             / 'sdk/templates/tool/plugin.toml',
     )
 
+    test_manifest_invalid = executable(
+        'test-manifest-invalid',
+        'test_manifest_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('manifest-invalid', test_manifest_invalid)
+
     test_installer = executable(
         'test-installer',
         'test_installer.c',
@@ -475,13 +647,23 @@ if get_option('tests')
             meson.project_source_root(),
             test_installer.full_path(),
             telos_abi_check.full_path(),
+            telos_plugin_host.full_path(),
         ],
         depends: [
             test_installer,
             telos_abi_check,
+            telos_plugin_host,
         ],
         timeout: 180,
     )
+
+    test_install_invalid = executable(
+        'test-install-invalid',
+        'test_install_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('install-invalid', test_install_invalid, timeout: 30)
 
     test_config = executable(
         'test-config',
@@ -490,6 +672,14 @@ if get_option('tests')
     )
 
     test('config-precedence', test_config)
+
+    test_config_invalid = executable(
+        'test-config-invalid',
+        'test_config_invalid.c',
+        dependencies: telos_dep,
+    )
+
+    test('config-invalid', test_config_invalid)
 
     test(
         'cli-functional',
@@ -500,10 +690,12 @@ if get_option('tests')
             meson.project_source_root(),
             telos_cli.full_path(),
             telos_abi_check.full_path(),
+            telos_plugin_host.full_path(),
         ],
         depends: [
             telos_cli,
             telos_abi_check,
+            telos_plugin_host,
         ],
         timeout: 180,
     )
@@ -532,8 +724,14 @@ if get_option('tests')
     test(
         'linux-agent-process-scenario',
         test_linux_scenario,
-        args: telos_plugin_host.full_path(),
-        depends: telos_plugin_host,
+        args: [
+            telos_plugin_host.full_path(),
+            fixture_plugin_process.full_path(),
+        ],
+        depends: [
+            telos_plugin_host,
+            fixture_plugin_process,
+        ],
         timeout: 30,
     )
 

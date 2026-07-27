@@ -9,6 +9,18 @@ struct provider_fixture {
     size_t dispatches;
 };
 
+static void assert_string_field(
+    const struct telos_value *object,
+    const char *key,
+    const char *expected
+)
+{
+    assert(strcmp(
+        telos_value_string(telos_value_get(object, key)),
+        expected
+    ) == 0);
+}
+
 static struct telos_value *schema(void)
 {
     struct telos_value *type = telos_value_new_string("object");
@@ -59,7 +71,7 @@ static bool dispatch(
         struct telos_value *first = telos_value_new_object(NULL, NULL, 0);
         struct telos_value *second = telos_value_new_object(NULL, NULL, 0);
 
-        assert(telos_value_count(request->items) == 0);
+        assert(telos_value_count(request->items) == 1);
         event.kind = TELOS_PROVIDER_TOOL_CALL_COMPLETED;
         event.call_id = "call-1";
         event.name = "dev.zevorn.echo";
@@ -84,18 +96,42 @@ static bool dispatch(
         return emit(&event, emit_context, error);
     }
 
-    assert(telos_value_count(request->items) == 2);
-    for (size_t index = 0; index < 2; ++index) {
-        const struct telos_value *item = telos_value_at(
-            request->items,
-            index
-        );
-
-        assert(strcmp(
-            telos_value_string(telos_value_get(item, "type")),
-            "function_call_output"
-        ) == 0);
-    }
+    assert(telos_value_count(request->items) == 5);
+    assert_string_field(
+        telos_value_at(request->items, 0),
+        "content",
+        "use echo"
+    );
+    assert_string_field(
+        telos_value_at(request->items, 1),
+        "type",
+        "function_call"
+    );
+    assert_string_field(
+        telos_value_at(request->items, 1),
+        "arguments",
+        "{}"
+    );
+    assert_string_field(
+        telos_value_at(request->items, 2),
+        "type",
+        "function_call"
+    );
+    assert_string_field(
+        telos_value_at(request->items, 3),
+        "type",
+        "function_call_output"
+    );
+    assert_string_field(
+        telos_value_at(request->items, 3),
+        "output",
+        "{}"
+    );
+    assert_string_field(
+        telos_value_at(request->items, 4),
+        "type",
+        "function_call_output"
+    );
     event.kind = TELOS_PROVIDER_TEXT_DELTA;
     event.delta = "both tools completed";
     if (!emit(&event, emit_context, error)) {
@@ -133,7 +169,17 @@ int main(void)
         telos_capability_broker_create(NULL, 0, allow, NULL, NULL);
     struct provider_fixture fixture = {0};
     struct telos_agent_options options;
-    struct telos_value *items = telos_value_new_array(NULL, 0);
+    struct telos_value *role = telos_value_new_string("user");
+    struct telos_value *content = telos_value_new_string("use echo");
+    const char *item_keys[] = {"role", "content"};
+    const struct telos_value *item_fields[] = {role, content};
+    struct telos_value *item = telos_value_new_object(
+        item_keys,
+        item_fields,
+        2
+    );
+    const struct telos_value *item_values[] = {item};
+    struct telos_value *items = telos_value_new_array(item_values, 1);
     struct telos_value *tools = telos_value_new_array(NULL, 0);
     struct telos_value *provider_options = telos_value_new_object(
         NULL,
@@ -181,6 +227,9 @@ int main(void)
     telos_value_release(provider_options);
     telos_value_release(tools);
     telos_value_release(items);
+    telos_value_release(item);
+    telos_value_release(content);
+    telos_value_release(role);
     telos_capability_broker_destroy(broker);
     telos_registry_generation_release(generation);
     telos_registry_destroy(registry);

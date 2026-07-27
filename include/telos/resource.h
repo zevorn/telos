@@ -73,6 +73,14 @@ char *telos_skill_resolve_path(
     struct telos_error **error
 );
 
+char *telos_skill_resolve_script(
+    const struct telos_skill *skill,
+    const char *relative_path,
+    const char *const *available_capabilities,
+    size_t available_capability_count,
+    struct telos_error **error
+);
+
 void telos_resource_string_free(char *value);
 
 #ifdef __cplusplus

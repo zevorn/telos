@@ -242,20 +242,24 @@ static bool transition_allowed(
     enum telos_plugin_state next
 )
 {
-    return (current == TELOS_PLUGIN_DISCOVERED
-            && next == TELOS_PLUGIN_VERIFIED)
-        || (current == TELOS_PLUGIN_VERIFIED
-            && next == TELOS_PLUGIN_LOADED)
-        || (current == TELOS_PLUGIN_LOADED
-            && next == TELOS_PLUGIN_INITIALIZING)
-        || (current == TELOS_PLUGIN_INITIALIZING
-            && next == TELOS_PLUGIN_ACTIVE)
-        || (current == TELOS_PLUGIN_ACTIVE
-            && next == TELOS_PLUGIN_QUIESCING)
-        || (current == TELOS_PLUGIN_QUIESCING
-            && next == TELOS_PLUGIN_STOPPED)
-        || (current == TELOS_PLUGIN_STOPPED
-            && next == TELOS_PLUGIN_UNLOADED);
+    switch (current) {
+    case TELOS_PLUGIN_DISCOVERED:
+        return next == TELOS_PLUGIN_VERIFIED;
+    case TELOS_PLUGIN_VERIFIED:
+        return next == TELOS_PLUGIN_LOADED;
+    case TELOS_PLUGIN_LOADED:
+        return next == TELOS_PLUGIN_INITIALIZING;
+    case TELOS_PLUGIN_INITIALIZING:
+        return next == TELOS_PLUGIN_ACTIVE;
+    case TELOS_PLUGIN_ACTIVE:
+        return next == TELOS_PLUGIN_QUIESCING;
+    case TELOS_PLUGIN_QUIESCING:
+        return next == TELOS_PLUGIN_STOPPED;
+    case TELOS_PLUGIN_STOPPED:
+        return next == TELOS_PLUGIN_UNLOADED;
+    default:
+        return false;
+    }
 }
 
 bool telos_plugin_instance_transition(

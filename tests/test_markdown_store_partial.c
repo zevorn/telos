@@ -19,21 +19,24 @@ int main(void)
         return 1;
     }
     file = fdopen(descriptor, "wb");
+    if (file == NULL) {
+        close(descriptor);
+        unlink(path);
+        return 1;
+    }
     if (
-        file == NULL
-        || fwrite(
+        fwrite(
             "# Telos Event Log v1\n\n## 1 · incomplete\n",
             1,
             strlen("# Telos Event Log v1\n\n## 1 · incomplete\n"),
             file
         ) != strlen("# Telos Event Log v1\n\n## 1 · incomplete\n")
-        || fclose(file) != 0
     ) {
-        if (file != NULL) {
-            fclose(file);
-        } else {
-            close(descriptor);
-        }
+        fclose(file);
+        unlink(path);
+        return 1;
+    }
+    if (fclose(file) != 0) {
         unlink(path);
         return 1;
     }

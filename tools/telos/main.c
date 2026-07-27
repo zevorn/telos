@@ -27,6 +27,7 @@ struct cli_options {
     const char *sdk_pkgconfig;
     const char *sdk_sysroot;
     const char *abi_check;
+    const char *plugin_host;
     const char *container_image;
 };
 
@@ -52,6 +53,7 @@ static void usage(FILE *stream)
         "  --sdk-pkgconfig PATH   SDK pkg-config directory\n"
         "  --sdk-sysroot PATH     SDK installation sysroot\n"
         "  --abi-check PATH       telos-abi-check executable\n"
+        "  --plugin-host PATH     telos-plugin-host executable\n"
         "  --help                  Show this help\n",
         stream
     );
@@ -148,9 +150,11 @@ static bool approve_install(
     fprintf(
         stderr,
         "Installation requires approval: git=%s native=%s "
-        "permissions=%zu. Re-run with --yes after review.\n",
+        "unlocked-source=%s permissions=%zu. "
+        "Re-run with --yes after review.\n",
         risk->git_source ? "true" : "false",
         risk->native_build ? "true" : "false",
+        risk->unlocked_source ? "true" : "false",
         risk->permission_count
     );
     return false;
@@ -301,9 +305,10 @@ static bool ensure_state_directory(
     return true;
 }
 
-static int plugin_install(
+static int plugin_prepare(
     const struct cli_options *options,
-    const char *source
+    const char *source,
+    enum telos_install_goal goal
 )
 {
     struct telos_install_options install_options = {
@@ -312,10 +317,12 @@ static int plugin_install(
         .sdk_pkgconfig_path = options->sdk_pkgconfig,
         .sdk_sysroot = options->sdk_sysroot,
         .abi_check_path = options->abi_check,
+        .plugin_host_path = options->plugin_host,
         .container_image = options->container_image,
         .builder = strcmp(options->builder, "native") == 0
             ? TELOS_BUILDER_NATIVE
             : TELOS_BUILDER_CONTAINER,
+        .goal = goal,
         .timeout_seconds = 300,
         .approve = approve_install,
         .approve_context = (void *)options,
@@ -340,7 +347,9 @@ static int plugin_install(
                 ? 4
                 : 3,
             error,
-            "Plugin installation failed"
+            goal == TELOS_INSTALL_GOAL_INSTALL
+                ? "Plugin installation failed"
+                : "Plugin preparation failed"
         );
 
         telos_error_release(error);
@@ -382,13 +391,71 @@ static int plugin_install(
         telos_value_release(ok);
     } else {
         printf(
-            "Installed %s %s (%s)\n",
+            "%s %s %s (%s)\n",
+            goal == TELOS_INSTALL_GOAL_INSTALL ? "Installed" : "Prepared",
             installed.plugin_id,
             installed.version,
             installed.cache_hit ? "cache hit" : "built from source"
         );
     }
     telos_install_result_clear(&installed);
+    return 0;
+}
+
+static int plugin_change(
+    const struct cli_options *options,
+    const char *plugin_id,
+    const char *cache_key,
+    bool remove
+)
+{
+    struct telos_error *error = NULL;
+    bool changed = remove
+        ? telos_plugin_remove(
+            options->state_directory,
+            plugin_id,
+            &error
+        )
+        : telos_plugin_activate(
+            options->state_directory,
+            plugin_id,
+            cache_key,
+            &error
+        );
+
+    if (!changed) {
+        int result = print_error(
+            options->json,
+            3,
+            error,
+            remove ? "Plugin removal failed" : "Plugin activation failed"
+        );
+
+        telos_error_release(error);
+        return result;
+    }
+    if (options->json) {
+        struct telos_value *ok = telos_value_new_boolean(true);
+        struct telos_value *id = telos_value_new_string(plugin_id);
+        struct telos_value *action = telos_value_new_string(
+            remove ? "removed" : "activated"
+        );
+        const char *keys[] = {"ok", "id", "action"};
+        const struct telos_value *values[] = {ok, id, action};
+        struct telos_value *root = telos_value_new_object(keys, values, 3);
+
+        print_json(root);
+        telos_value_release(root);
+        telos_value_release(action);
+        telos_value_release(id);
+        telos_value_release(ok);
+    } else {
+        printf(
+            "%s %s\n",
+            remove ? "Removed" : "Activated",
+            plugin_id
+        );
+    }
     return 0;
 }
 
@@ -680,21 +747,39 @@ static int dispatch(
             return plugin_info(options, argv[index]);
         }
         if (strcmp(subcommand, "install") == 0 && index + 1 == argc) {
-            return plugin_install(options, argv[index]);
+            return plugin_prepare(
+                options,
+                argv[index],
+                TELOS_INSTALL_GOAL_INSTALL
+            );
+        }
+        if (strcmp(subcommand, "build") == 0 && index + 1 == argc) {
+            return plugin_prepare(
+                options,
+                argv[index],
+                TELOS_INSTALL_GOAL_BUILD
+            );
+        }
+        if (strcmp(subcommand, "test") == 0 && index + 1 == argc) {
+            return plugin_prepare(
+                options,
+                argv[index],
+                TELOS_INSTALL_GOAL_TEST
+            );
+        }
+        if (strcmp(subcommand, "activate") == 0 && index + 2 == argc) {
+            return plugin_change(
+                options,
+                argv[index],
+                argv[index + 1],
+                false
+            );
+        }
+        if (strcmp(subcommand, "remove") == 0 && index + 1 == argc) {
+            return plugin_change(options, argv[index], NULL, true);
         }
         if (strcmp(subcommand, "rollback") == 0 && index + 1 == argc) {
             return plugin_rollback(options, argv[index]);
-        }
-        if (
-            strcmp(subcommand, "build") == 0
-            || strcmp(subcommand, "test") == 0
-            || strcmp(subcommand, "activate") == 0
-            || strcmp(subcommand, "remove") == 0
-        ) {
-            return unsupported(
-                options,
-                "This command requires an explicit installation transaction"
-            );
         }
     }
     if (strcmp(command, "resource") == 0 && index < argc) {
@@ -730,6 +815,7 @@ int main(int argc, char **argv)
         .sdk_pkgconfig = "",
         .sdk_sysroot = "/",
         .abi_check = "telos-abi-check",
+        .plugin_host = "telos-plugin-host",
         .container_image = "ghcr.io/processmission/telos-sdk-c:0.1.0",
     };
     const char *home = getenv("HOME");
@@ -807,6 +893,12 @@ int main(int argc, char **argv)
             && strcmp(argv[index], "--abi-check") == 0
         ) {
             options.abi_check = argv[index + 1];
+            index += 2;
+        } else if (
+            index + 1 < argc
+            && strcmp(argv[index], "--plugin-host") == 0
+        ) {
+            options.plugin_host = argv[index + 1];
             index += 2;
         } else {
             break;

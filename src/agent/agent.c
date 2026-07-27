@@ -17,6 +17,7 @@ struct pending_call {
 struct response_collector {
     char *text;
     size_t text_size;
+    char *response_id;
     struct pending_call *calls;
     size_t call_count;
     size_t call_capacity;
@@ -79,6 +80,7 @@ static void collector_clear(struct response_collector *collector)
         pending_call_clear(&collector->calls[index]);
     }
     free(collector->calls);
+    free(collector->response_id);
     free(collector->text);
     memset(collector, 0, sizeof(*collector));
 }
@@ -189,6 +191,31 @@ static bool collect_event(
         return false;
     }
     switch (event->kind) {
+    case TELOS_PROVIDER_RESPONSE_STARTED:
+        if (
+            collector->response_id != NULL
+            || event->response_id == NULL
+            || event->response_id[0] == '\0'
+        ) {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_PROTOCOL,
+                EPROTO,
+                "Provider response identifier is invalid or duplicated"
+            );
+            return false;
+        }
+        collector->response_id = copy_text(event->response_id);
+        if (collector->response_id != NULL) {
+            return true;
+        }
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Provider response identifier could not be collected"
+        );
+        return false;
     case TELOS_PROVIDER_TEXT_DELTA:
         if (append_text(collector, event->delta)) {
             return true;
@@ -336,54 +363,145 @@ static bool run_tools(
     return result;
 }
 
-static struct telos_value *tool_output_items(
+static char *value_json(const struct telos_value *value)
+{
+    size_t size = telos_value_json_size(value);
+    char *json = malloc(size);
+
+    if (
+        json == NULL
+        || !telos_value_write_json(value, json, size, NULL, NULL)
+    ) {
+        free(json);
+        return NULL;
+    }
+    return json;
+}
+
+static struct telos_value *function_call_item(
+    const struct pending_call *call
+)
+{
+    char *arguments_json = value_json(call->arguments);
+    struct telos_value *type = telos_value_new_string("function_call");
+    struct telos_value *call_id = telos_value_new_string(call->call_id);
+    struct telos_value *name = telos_value_new_string(call->name);
+    struct telos_value *arguments = telos_value_new_string(arguments_json);
+    const char *keys[] = {"type", "call_id", "name", "arguments"};
+    const struct telos_value *values[] = {
+        type,
+        call_id,
+        name,
+        arguments,
+    };
+    struct telos_value *item = NULL;
+
+    if (
+        arguments_json != NULL
+        && type != NULL
+        && call_id != NULL
+        && name != NULL
+        && arguments != NULL
+    ) {
+        item = telos_value_new_object(keys, values, 4);
+    }
+    telos_value_release(arguments);
+    telos_value_release(name);
+    telos_value_release(call_id);
+    telos_value_release(type);
+    free(arguments_json);
+    return item;
+}
+
+static struct telos_value *function_output_item(
+    const struct pending_call *call
+)
+{
+    char *output_json = value_json(call->result);
+    struct telos_value *type =
+        telos_value_new_string("function_call_output");
+    struct telos_value *call_id = telos_value_new_string(call->call_id);
+    struct telos_value *output = telos_value_new_string(output_json);
+    const char *keys[] = {"type", "call_id", "output"};
+    const struct telos_value *values[] = {type, call_id, output};
+    struct telos_value *item = NULL;
+
+    if (
+        output_json != NULL
+        && type != NULL
+        && call_id != NULL
+        && output != NULL
+    ) {
+        item = telos_value_new_object(keys, values, 3);
+    }
+    telos_value_release(output);
+    telos_value_release(call_id);
+    telos_value_release(type);
+    free(output_json);
+    return item;
+}
+
+static struct telos_value *continuation_items(
+    const struct telos_value *prior_items,
+    enum telos_provider_state_mode state_mode,
     const struct response_collector *collector
 )
 {
     struct telos_value **items;
     struct telos_value *result = NULL;
+    size_t prior_count = state_mode == TELOS_PROVIDER_STATE_LOCAL
+        ? telos_value_count(prior_items)
+        : 0;
+    size_t call_item_count = state_mode == TELOS_PROVIDER_STATE_LOCAL
+        ? collector->call_count
+        : 0;
+    size_t item_count;
 
-    if (collector->call_count > SIZE_MAX / sizeof(*items)) {
+    if (
+        prior_count > SIZE_MAX - call_item_count
+        || prior_count + call_item_count
+            > SIZE_MAX - collector->call_count
+    ) {
         return NULL;
     }
-    items = calloc(collector->call_count, sizeof(*items));
+    item_count = prior_count + call_item_count + collector->call_count;
+    if (item_count > SIZE_MAX / sizeof(*items)) {
+        return NULL;
+    }
+    items = calloc(item_count, sizeof(*items));
     if (items == NULL) {
         return NULL;
     }
+    for (size_t index = 0; index < prior_count; ++index) {
+        items[index] = telos_value_retain(
+            telos_value_at(prior_items, index)
+        );
+    }
     for (size_t index = 0; index < collector->call_count; ++index) {
-        struct telos_value *type = telos_value_new_string(
-            "function_call_output"
-        );
-        struct telos_value *call_id = telos_value_new_string(
-            collector->calls[index].call_id
-        );
-        const char *keys[] = {"type", "call_id", "output"};
-        const struct telos_value *values[] = {
-            type,
-            call_id,
-            collector->calls[index].result,
-        };
-
-        if (
-            type != NULL
-            && call_id != NULL
-            && values[2] != NULL
-        ) {
-            items[index] = telos_value_new_object(keys, values, 3);
+        if (state_mode == TELOS_PROVIDER_STATE_LOCAL) {
+            items[prior_count + index] = function_call_item(
+                &collector->calls[index]
+            );
         }
-        telos_value_release(call_id);
-        telos_value_release(type);
-        if (items[index] == NULL) {
+        items[prior_count + call_item_count + index] =
+            function_output_item(&collector->calls[index]);
+        if (
+            (
+                state_mode == TELOS_PROVIDER_STATE_LOCAL
+                && items[prior_count + index] == NULL
+            )
+            || items[prior_count + call_item_count + index] == NULL
+        ) {
             goto cleanup;
         }
     }
     result = telos_value_new_array(
         (const struct telos_value *const *)items,
-        collector->call_count
+        item_count
     );
 
 cleanup:
-    for (size_t index = 0; index < collector->call_count; ++index) {
+    for (size_t index = 0; index < item_count; ++index) {
         telos_value_release(items[index]);
     }
     free(items);
@@ -400,6 +518,7 @@ bool telos_agent_run(
 {
     struct telos_provider_request current;
     struct telos_value *owned_items = NULL;
+    char *owned_previous_response_id = NULL;
     struct response_collector collector = {0};
     size_t maximum_rounds;
 
@@ -417,8 +536,15 @@ bool telos_agent_run(
         || options->capability_broker == NULL
         || options->dispatch == NULL
         || request->items == NULL
+        || telos_value_type(request->items) != TELOS_VALUE_ARRAY
         || request->tools == NULL
+        || telos_value_type(request->tools) != TELOS_VALUE_ARRAY
         || request->options == NULL
+        || telos_value_type(request->options) != TELOS_VALUE_OBJECT
+        || (
+            request->state_mode != TELOS_PROVIDER_STATE_LOCAL
+            && request->state_mode != TELOS_PROVIDER_STATE_REMOTE
+        )
     ) {
         set_error(
             error,
@@ -481,15 +607,36 @@ bool telos_agent_run(
             }
             collector_clear(&collector);
             telos_value_release(owned_items);
+            free(owned_previous_response_id);
             return true;
         }
 
         if (!run_tools(options, cancel, &collector, error)) {
             goto failure;
         }
+        if (
+            current.state_mode == TELOS_PROVIDER_STATE_REMOTE
+            && collector.response_id == NULL
+        ) {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_PROTOCOL,
+                EPROTO,
+                "Remote Provider continuation requires a response identifier"
+            );
+            goto failure;
+        }
         result->tool_calls += collector.call_count;
-        telos_value_release(owned_items);
-        owned_items = tool_output_items(&collector);
+        {
+            struct telos_value *next_items = continuation_items(
+                current.items,
+                current.state_mode,
+                &collector
+            );
+
+            telos_value_release(owned_items);
+            owned_items = next_items;
+        }
         if (owned_items == NULL) {
             set_error(
                 error,
@@ -500,6 +647,20 @@ bool telos_agent_run(
             goto failure;
         }
         current.items = owned_items;
+        if (current.state_mode == TELOS_PROVIDER_STATE_REMOTE) {
+            free(owned_previous_response_id);
+            owned_previous_response_id = copy_text(collector.response_id);
+            if (owned_previous_response_id == NULL) {
+                set_error(
+                    error,
+                    TELOS_ERROR_DOMAIN_MEMORY,
+                    ENOMEM,
+                    "Remote Provider response identifier allocation failed"
+                );
+                goto failure;
+            }
+            current.previous_response_id = owned_previous_response_id;
+        }
         collector_clear(&collector);
     }
 
@@ -513,6 +674,7 @@ bool telos_agent_run(
 failure:
     collector_clear(&collector);
     telos_value_release(owned_items);
+    free(owned_previous_response_id);
     telos_agent_result_clear(result);
     return false;
 }

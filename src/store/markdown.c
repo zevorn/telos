@@ -532,7 +532,7 @@ static bool load_file(
         );
         return false;
     }
-    content = malloc((size_t)length + 1);
+    content = calloc((size_t)length + 1, 1);
     if (
         content == NULL
         || fread(content, 1, (size_t)length, file) != (size_t)length
@@ -549,7 +549,6 @@ static bool load_file(
         );
         return false;
     }
-    content[length] = '\0';
     fclose(file);
     result = recover_records(markdown, content, (size_t)length, error);
     free(content);

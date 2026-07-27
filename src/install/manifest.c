@@ -58,8 +58,10 @@ static void set_error(
 static char *read_text_file(const char *path, struct telos_error **error)
 {
     FILE *stream;
-    long length;
+    long length = -1;
     char *content;
+    size_t received;
+    int close_result;
 
     if (path == NULL || path[0] == '\0') {
         set_error(
@@ -86,31 +88,44 @@ static char *read_text_file(const char *path, struct telos_error **error)
         || length > (long)MANIFEST_MAX_SIZE
         || fseek(stream, 0, SEEK_SET) != 0
     ) {
+        bool too_large = length >= 0
+            && length > (long)MANIFEST_MAX_SIZE;
+
         fclose(stream);
         set_error(
             error,
             TELOS_ERROR_DOMAIN_IO,
-            EFBIG,
+            too_large ? EFBIG : EIO,
             "Manifest file size is invalid"
         );
         return NULL;
     }
-    content = malloc((size_t)length + 1);
-    if (
-        content == NULL
-        || fread(content, 1, (size_t)length, stream) != (size_t)length
-        || fclose(stream) != 0
-    ) {
+    content = calloc((size_t)length + 1, 1);
+    if (content == NULL) {
+        fclose(stream);
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Manifest file allocation failed"
+        );
+        return NULL;
+    }
+    errno = 0;
+    received = fread(content, 1, (size_t)length, stream);
+    close_result = fclose(stream);
+    if (received != (size_t)length || close_result != 0) {
+        int saved_errno = errno;
+
         free(content);
         set_error(
             error,
             TELOS_ERROR_DOMAIN_IO,
-            errno == 0 ? EIO : errno,
+            saved_errno == 0 ? EIO : saved_errno,
             "Manifest file could not be read"
         );
         return NULL;
     }
-    content[length] = '\0';
     return content;
 }
 
@@ -118,7 +133,7 @@ static char *trim(char *text)
 {
     char *end;
 
-    while (isspace((unsigned char)*text)) {
+    while (*text != '\0' && isspace((unsigned char)*text)) {
         text += 1;
     }
     end = text + strlen(text);
@@ -129,7 +144,7 @@ static char *trim(char *text)
     return text;
 }
 
-static bool split_assignment(char *line, char **key, char **value)
+static char *strip_comment(char *line)
 {
     bool in_string = false;
 
@@ -141,7 +156,14 @@ static bool split_assignment(char *line, char **key, char **value)
             break;
         }
     }
-    line = trim(line);
+    return trim(line);
+}
+
+static bool split_assignment(char *line, char **key, char **value)
+{
+    bool in_string = false;
+
+    line = strip_comment(line);
     if (line[0] == '\0') {
         return false;
     }
@@ -157,6 +179,52 @@ static bool split_assignment(char *line, char **key, char **value)
         }
     }
     return false;
+}
+
+static bool array_complete(const char *value)
+{
+    bool in_string = false;
+    bool escaped = false;
+
+    if (value == NULL || value[0] != '[') {
+        return true;
+    }
+    for (const char *cursor = value + 1; *cursor != '\0'; ++cursor) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (*cursor == '\\' && in_string) {
+            escaped = true;
+        } else if (*cursor == '"') {
+            in_string = !in_string;
+        } else if (*cursor == ']' && !in_string) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool append_text(char **text, size_t *size, const char *addition)
+{
+    size_t addition_size = strlen(addition);
+    char *next;
+
+    if (
+        *size > MANIFEST_MAX_SIZE - 2
+        || addition_size > MANIFEST_MAX_SIZE - *size - 2
+    ) {
+        return false;
+    }
+    next = realloc(*text, *size + addition_size + 2);
+    if (next == NULL) {
+        return false;
+    }
+    next[*size] = ' ';
+    memcpy(next + *size + 1, addition, addition_size + 1);
+    *text = next;
+    *size += addition_size + 1;
+    return true;
 }
 
 static char *parse_string(const char *value)
@@ -594,6 +662,7 @@ struct telos_plugin_manifest *telos_plugin_manifest_load(
         char *key;
         char *value;
         char *clean = trim(line);
+        char *joined = NULL;
 
         if (clean[0] == '\0' || clean[0] == '#') {
             continue;
@@ -610,18 +679,48 @@ struct telos_plugin_manifest *telos_plugin_manifest_load(
             sections |= 1U << section;
             continue;
         }
-        if (
-            section == SECTION_NONE
-            || !split_assignment(clean, &key, &value)
-            || !parse_manifest_field(
-                manifest,
-                section,
-                key,
-                value,
-                &build_seen
-            )
-        ) {
+        if (section == SECTION_NONE || !split_assignment(clean, &key, &value)) {
             valid = false;
+            break;
+        }
+        if (value[0] == '[' && !array_complete(value)) {
+            size_t joined_size = strlen(value);
+
+            joined = malloc(joined_size + 1);
+            if (joined != NULL) {
+                memcpy(joined, value, joined_size + 1);
+            }
+            while (joined != NULL && !array_complete(joined)) {
+                line = strtok_r(NULL, "\n", &save);
+                if (line == NULL) {
+                    break;
+                }
+                clean = strip_comment(line);
+                if (
+                    clean[0] != '\0'
+                    && !append_text(&joined, &joined_size, clean)
+                ) {
+                    free(joined);
+                    joined = NULL;
+                    break;
+                }
+            }
+            if (joined == NULL || !array_complete(joined)) {
+                free(joined);
+                valid = false;
+                break;
+            }
+            value = joined;
+        }
+        valid = parse_manifest_field(
+            manifest,
+            section,
+            key,
+            value,
+            &build_seen
+        );
+        free(joined);
+        if (!valid) {
             break;
         }
     }
@@ -1050,6 +1149,67 @@ bool telos_plugin_lock_verify(
             );
             return false;
         }
+    }
+    return true;
+}
+
+bool telos_plugin_source_digest(
+    const char *source_directory,
+    char output[65],
+    struct telos_error **error
+)
+{
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (
+        source_directory == NULL
+        || output == NULL
+        || !telos_sha256_source_directory(source_directory, output)
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Plugin source directory could not be hashed"
+        );
+        return false;
+    }
+    return true;
+}
+
+bool telos_plugin_lock_verify_source(
+    const struct telos_plugin_lock *lock,
+    const char *source_directory,
+    struct telos_error **error
+)
+{
+    char digest[65];
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (
+        lock == NULL
+        || source_directory == NULL
+        || !telos_sha256_source_directory(source_directory, digest)
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_ARGUMENT,
+            EINVAL,
+            "Plugin lock and source directory are required"
+        );
+        return false;
+    }
+    if (strcmp(digest, lock->source_hash) != 0) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_PLUGIN,
+            EBADMSG,
+            "Plugin source hash verification failed"
+        );
+        return false;
     }
     return true;
 }

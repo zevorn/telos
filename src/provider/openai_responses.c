@@ -57,8 +57,9 @@ struct telos_value *telos_openai_responses_build_request(
     struct telos_error **error
 )
 {
-    const char *keys[7];
-    struct telos_value *values[7] = {0};
+    const char **keys = NULL;
+    struct telos_value **values = NULL;
+    size_t option_count;
     size_t count = 0;
     struct telos_value *result = NULL;
 
@@ -80,13 +81,6 @@ struct telos_value *telos_openai_responses_build_request(
             request->state_mode != TELOS_PROVIDER_STATE_LOCAL
             && request->state_mode != TELOS_PROVIDER_STATE_REMOTE
         )
-        || (
-            request->state_mode == TELOS_PROVIDER_STATE_REMOTE
-            && (
-                request->previous_response_id == NULL
-                || request->previous_response_id[0] == '\0'
-            )
-        )
     ) {
         set_error(
             error,
@@ -95,6 +89,27 @@ struct telos_value *telos_openai_responses_build_request(
             "Provider request is invalid"
         );
         return NULL;
+    }
+    option_count = telos_value_count(request->options);
+    if (option_count > SIZE_MAX - 7) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Responses request option count is too large"
+        );
+        return NULL;
+    }
+    keys = calloc(option_count + 7, sizeof(*keys));
+    values = calloc(option_count + 7, sizeof(*values));
+    if (keys == NULL || values == NULL) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Responses request allocation failed"
+        );
+        goto cleanup;
     }
 
     keys[count] = "model";
@@ -105,16 +120,46 @@ struct telos_value *telos_openai_responses_build_request(
     values[count++] = telos_value_retain(request->items);
     keys[count] = "tools";
     values[count++] = telos_value_retain(request->tools);
-    keys[count] = "options";
-    values[count++] = telos_value_retain(request->options);
     keys[count] = "store";
     values[count++] = telos_value_new_boolean(
         request->state_mode == TELOS_PROVIDER_STATE_REMOTE
     );
-    if (request->state_mode == TELOS_PROVIDER_STATE_REMOTE) {
+    keys[count] = "stream";
+    values[count++] = telos_value_new_boolean(true);
+    if (
+        request->state_mode == TELOS_PROVIDER_STATE_REMOTE
+        && request->previous_response_id != NULL
+        && request->previous_response_id[0] != '\0'
+    ) {
         keys[count] = "previous_response_id";
         values[count++] = telos_value_new_string(
             request->previous_response_id
+        );
+    }
+    for (size_t index = 0; index < option_count; ++index) {
+        const char *key = telos_value_key_at(request->options, index);
+
+        if (
+            key == NULL
+            || strcmp(key, "model") == 0
+            || strcmp(key, "instructions") == 0
+            || strcmp(key, "input") == 0
+            || strcmp(key, "tools") == 0
+            || strcmp(key, "store") == 0
+            || strcmp(key, "stream") == 0
+            || strcmp(key, "previous_response_id") == 0
+        ) {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_ARGUMENT,
+                EINVAL,
+                "Responses option overrides a reserved field"
+            );
+            goto cleanup;
+        }
+        keys[count] = key;
+        values[count++] = telos_value_retain(
+            telos_value_get(request->options, key)
         );
     }
     for (size_t index = 0; index < count; ++index) {
@@ -146,6 +191,8 @@ cleanup:
     for (size_t index = 0; index < count; ++index) {
         telos_value_release(values[index]);
     }
+    free(values);
+    free(keys);
     return result;
 }
 
@@ -925,7 +972,9 @@ bool telos_openai_sse_parser_feed(
         );
         return false;
     }
-    memcpy(parser->buffer + parser->size, data, size);
+    if (size > 0) {
+        memcpy(parser->buffer + parser->size, data, size);
+    }
     parser->size += size;
     parser->buffer[parser->size] = '\0';
     if (parser->size > TELOS_OPENAI_SSE_MAX_SIZE) {
@@ -1030,6 +1079,35 @@ struct telos_openai_responses_provider *telos_openai_responses_provider_create(
         *error = NULL;
     }
     if (
+        config != NULL
+        && config->capability_count
+            > SIZE_MAX / sizeof(*provider->capabilities)
+    ) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Responses Provider capability size overflow"
+        );
+        return NULL;
+    }
+    if (config != NULL && config->capabilities != NULL) {
+        for (size_t index = 0; index < config->capability_count; ++index) {
+            if (
+                config->capabilities[index] == NULL
+                || config->capabilities[index][0] == '\0'
+            ) {
+                set_error(
+                    error,
+                    TELOS_ERROR_DOMAIN_ARGUMENT,
+                    EINVAL,
+                    "Responses Provider capability is invalid"
+                );
+                return NULL;
+            }
+        }
+    }
+    if (
         config == NULL
         || config->model == NULL
         || config->model[0] == '\0'
@@ -1088,19 +1166,6 @@ struct telos_openai_responses_provider *telos_openai_responses_provider_create(
         return NULL;
     }
     if (config->capability_count > 0) {
-        if (
-            config->capability_count
-            > SIZE_MAX / sizeof(*provider->capabilities)
-        ) {
-            telos_openai_responses_provider_destroy(provider);
-            set_error(
-                error,
-                TELOS_ERROR_DOMAIN_MEMORY,
-                ENOMEM,
-                "Responses Provider capability size overflow"
-            );
-            return NULL;
-        }
         provider->capabilities = calloc(
             config->capability_count,
             sizeof(*provider->capabilities)
@@ -1120,17 +1185,6 @@ struct telos_openai_responses_provider *telos_openai_responses_provider_create(
             index < config->capability_count;
             ++index
         ) {
-            if (config->capabilities[index] == NULL) {
-                provider->capability_count = index;
-                telos_openai_responses_provider_destroy(provider);
-                set_error(
-                    error,
-                    TELOS_ERROR_DOMAIN_ARGUMENT,
-                    EINVAL,
-                    "Responses Provider capability is invalid"
-                );
-                return NULL;
-            }
             provider->capabilities[index] = copy_string(
                 config->capabilities[index]
             );
@@ -1299,6 +1353,12 @@ bool telos_openai_responses_provider_dispatch(
             provider->transport_context,
             error
         )) {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_IO,
+                EIO,
+                "Responses transport failed"
+            );
             goto cleanup;
         }
     }

@@ -61,8 +61,11 @@ static char *read_file(const char *path)
         fclose(file);
         return NULL;
     }
-    content[length] = '\0';
-    fclose(file);
+    content[(size_t)length] = '\0';
+    if (fclose(file) != 0) {
+        free(content);
+        return NULL;
+    }
     return content;
 }
 

@@ -94,6 +94,18 @@ bool telos_plugin_lock_verify(
     struct telos_error **error
 );
 
+bool telos_plugin_source_digest(
+    const char *source_directory,
+    char output[65],
+    struct telos_error **error
+);
+
+bool telos_plugin_lock_verify_source(
+    const struct telos_plugin_lock *lock,
+    const char *source_directory,
+    struct telos_error **error
+);
+
 bool telos_plugin_lock_write(
     const struct telos_plugin_lock *lock,
     const char *path,

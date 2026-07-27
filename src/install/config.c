@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,15 +70,25 @@ static char *copy_text(const char *text)
     return copy;
 }
 
+static bool is_space(char value)
+{
+    return value == ' '
+        || value == '\t'
+        || value == '\n'
+        || value == '\r'
+        || value == '\f'
+        || value == '\v';
+}
+
 static char *trim(char *text)
 {
     char *end;
 
-    while (isspace((unsigned char)*text)) {
+    while (*text != '\0' && is_space(*text)) {
         text += 1;
     }
     end = text + strlen(text);
-    while (end > text && isspace((unsigned char)end[-1])) {
+    while (end > text && is_space(end[-1])) {
         end -= 1;
     }
     *end = '\0';

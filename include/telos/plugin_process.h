@@ -18,6 +18,23 @@ struct telos_plugin_process *telos_plugin_process_spawn(
     struct telos_error **error
 );
 
+struct telos_plugin_process *telos_plugin_process_spawn_plugin(
+    const char *host_path,
+    const char *plugin_path,
+    const char *plugin_id,
+    struct telos_error **error
+);
+
+bool telos_plugin_process_execute_tool(
+    struct telos_plugin_process *process,
+    const char *tool_id,
+    const struct telos_value *arguments,
+    unsigned int timeout_milliseconds,
+    const struct telos_cancel *cancel,
+    struct telos_value **response_body,
+    struct telos_error **error
+);
+
 bool telos_plugin_process_request(
     struct telos_plugin_process *process,
     const char *type,

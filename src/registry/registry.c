@@ -195,6 +195,26 @@ struct telos_registry *telos_registry_create(
         );
         return NULL;
     }
+    if (capability_count > SIZE_MAX / sizeof(*registry->capabilities)) {
+        set_error(
+            error,
+            TELOS_ERROR_DOMAIN_MEMORY,
+            ENOMEM,
+            "Registry capability count is too large"
+        );
+        return NULL;
+    }
+    for (size_t index = 0; index < capability_count; ++index) {
+        if (capabilities[index] == NULL || capabilities[index][0] == '\0') {
+            set_error(
+                error,
+                TELOS_ERROR_DOMAIN_ARGUMENT,
+                EINVAL,
+                "Registry capability names must not be empty"
+            );
+            return NULL;
+        }
+    }
     registry = calloc(1, sizeof(*registry));
     if (registry == NULL) {
         set_error(

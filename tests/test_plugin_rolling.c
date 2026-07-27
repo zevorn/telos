@@ -51,8 +51,8 @@ static void publish(
 
 int main(void)
 {
-    int implementation_v1;
-    int implementation_v2;
+    int implementation_v1 = 1;
+    int implementation_v2 = 2;
     struct telos_registry *registry = telos_registry_create(NULL, 0, NULL);
     struct telos_plugin_instance *version_one =
         telos_plugin_instance_create("dev.zevorn.rolling@1", NULL);
