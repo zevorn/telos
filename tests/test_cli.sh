@@ -19,10 +19,13 @@ mkdir -p \
     "$temporary/resources/example"
 printf '%s\n' \
     '#!/bin/sh' \
-    "printf '%s\\n' \"\$@\" >'$temporary/docker.args'" \
+    "printf '%s\\n' \"\$@\" >'$temporary/container.args'" \
     'exit 99' \
-    >"$temporary/fake-bin/docker"
-chmod +x "$temporary/fake-bin/docker"
+    >"$temporary/fake-bin/podman"
+cp "$temporary/fake-bin/podman" "$temporary/fake-bin/docker"
+chmod +x \
+    "$temporary/fake-bin/podman" \
+    "$temporary/fake-bin/docker"
 DESTDIR="$temporary/sysroot" meson install -C "$build_root" >/dev/null
 pkgconfig=$(find \
     "$temporary/sysroot" \
@@ -106,11 +109,11 @@ then
     exit 1
 fi
 grep -q '"ok":false' "$temporary/container-error.json"
-grep -q -- '--network=none' "$temporary/docker.args"
-grep -q -- '--read-only' "$temporary/docker.args"
-grep -q -- '--cap-drop=ALL' "$temporary/docker.args"
-grep -q -- ':ro' "$temporary/docker.args"
-if grep -q -- '/var/run/docker.sock' "$temporary/docker.args"; then
+grep -q -- '--network=none' "$temporary/container.args"
+grep -q -- '--read-only' "$temporary/container.args"
+grep -q -- '--cap-drop=ALL' "$temporary/container.args"
+grep -q -- ':ro' "$temporary/container.args"
+if grep -q -- '/var/run/docker.sock' "$temporary/container.args"; then
     echo "container Builder mounted the container socket" >&2
     exit 1
 fi
