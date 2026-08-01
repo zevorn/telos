@@ -16,6 +16,7 @@ west build -b qemu_cortex_a53 samples/telos_agent \
 ```
 
 The ARM Virt target uses Zephyr's `qemu_cortex_a53` board and its emulated
-E1000 Ethernet device. Use `tools/run_zephyr_native.sh` and
-`tools/run_zephyr_qemu.sh` to validate the complete static Tool scenario.
-The QEMU runner uses user networking and does not require a host TAP device.
+E1000 Ethernet device. Use `tests/functional/run_zephyr_native.sh` and
+`tests/functional/run_zephyr_qemu.sh` to validate the complete static Tool
+scenario. The QEMU runner uses user networking and does not require a host
+TAP device.
