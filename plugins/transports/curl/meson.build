@@ -17,7 +17,6 @@ telos_curl_transport_plugin = static_library(
 telos_curl_transport_plugin_dep = declare_dependency(
     dependencies: [
         telos_base_dep,
-        curl_transport_dep,
         thread_dep,
     ],
     include_directories: curl_transport_inc,
