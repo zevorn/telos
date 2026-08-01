@@ -10,7 +10,13 @@ modes = ["process", "static"]
 default = "process"
 
 [platform]
-targets = ["linux-x86_64", "linux-aarch64", "zephyr-arm64"]
+targets = [
+    "linux-x86_64",
+    "linux-aarch64",
+    "darwin-x86_64",
+    "darwin-aarch64",
+    "zephyr-arm64",
+]
 
 [build]
 system = "meson"

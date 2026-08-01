@@ -3,13 +3,16 @@ subdir('providers')
 subdir('resources')
 subdir('context-sources')
 
-terminal_frontend_available = host_machine.system() == 'linux'
+posix_host_plugins_available = host_machine.system() == 'linux' or \
+    host_machine.system() == 'darwin'
+
+terminal_frontend_available = posix_host_plugins_available
 if terminal_frontend_available
     subdir('frontends')
 endif
 
 curl_transport_available = false
-if host_machine.system() == 'linux'
+if posix_host_plugins_available
     subdir('transports')
 endif
 

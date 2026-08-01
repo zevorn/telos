@@ -5,7 +5,7 @@ configured filesystem roots, validates `SKILL.md` metadata, publishes
 immutable Resource Generations, and resolves paths without allowing a Skill
 to escape its package directory.
 
-This is a Linux Context Source Plugin because it depends on POSIX directory
+This is a POSIX host Context Source Plugin because it depends on directory
 and filesystem APIs. It is intentionally absent from minimal Zephyr builds;
 firmware should use a separate Context Source Plugin backed by generated,
 read-only tables.

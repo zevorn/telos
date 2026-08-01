@@ -1,9 +1,9 @@
 # Terminal Frontend
 
-`dev.zevorn.terminal-frontend` is the Linux terminal adapter for interactive
-Telos sessions. It follows Pi's main-screen model: completed messages remain in
-the terminal scrollback while only the live response, editor, and footer are
-redrawn.
+`dev.zevorn.terminal-frontend` is the POSIX terminal adapter for interactive
+Telos sessions on Linux and macOS. It follows Pi's main-screen model: completed
+messages remain in the terminal scrollback while only the live response,
+editor, and footer are redrawn.
 
 This deliberately mirrors the interaction shape described by Pi's
 [interactive-mode documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md)

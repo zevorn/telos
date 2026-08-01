@@ -218,6 +218,7 @@ if terminal_frontend_available
         'terminal-tui',
         test_terminal_tui,
         suite: 'plugins',
+        is_parallel: false,
         timeout: 10,
     )
 endif

@@ -39,7 +39,9 @@ static const struct manifest_fields valid_fields = {
     .modes = "[\"builtin\", \"inprocess\", \"process\", \"static\"]",
     .default_mode = "\"process\"",
     .targets = "[\"linux-x86_64\", \"linux-aarch64\", "
-               "\"linux-riscv64\", \"zephyr-arm64\", \"zephyr-native\"]",
+               "\"linux-riscv64\", \"darwin-x86_64\", "
+               "\"darwin-aarch64\", \"zephyr-arm64\", "
+               "\"zephyr-native\"]",
     .system = "\"meson\"",
     .permissions = "[\"network.http\", \"secret.use:Provider_Key\"]",
     .plugin_extra = "",

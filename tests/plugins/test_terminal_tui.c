@@ -205,7 +205,6 @@ static void run_exit_scenario(const struct telos_frontend_session *session,
     assert(master >= 0);
     assert(grantpt(master) == 0);
     assert(unlockpt(master) == 0);
-    assert(ioctl(master, TIOCSWINSZ, &window) == 0);
     slave_name = ptsname(master);
     assert(slave_name != NULL);
     child = fork();
@@ -220,6 +219,7 @@ static void run_exit_scenario(const struct telos_frontend_session *session,
         if (slave < 0) {
             _exit(2);
         }
+        assert(ioctl(slave, TIOCSWINSZ, &window) == 0);
         if (term == NULL) {
             assert(unsetenv("TERM") == 0);
         } else {
@@ -255,6 +255,8 @@ static void run_exit_scenario(const struct telos_frontend_session *session,
         assert(read_until(master, output, sizeof(output), "╭"));
         assert(write(master, keys, key_count) == (ssize_t)key_count);
     }
+    memset(output, 0, sizeof(output));
+    assert(read_until(master, output, sizeof(output), "\033[?2004l"));
     assert(waitpid(child, &status, 0) == child);
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
@@ -295,7 +297,6 @@ int main(void)
     assert(master >= 0);
     assert(grantpt(master) == 0);
     assert(unlockpt(master) == 0);
-    assert(ioctl(master, TIOCSWINSZ, &window) == 0);
     slave_name = ptsname(master);
     assert(slave_name != NULL);
     child = fork();
@@ -310,6 +311,7 @@ int main(void)
         if (slave < 0) {
             _exit(2);
         }
+        assert(ioctl(slave, TIOCSWINSZ, &window) == 0);
         config = (struct telos_terminal_frontend_config){
             .session = &session,
             .input_descriptor = slave,
@@ -377,7 +379,9 @@ int main(void)
     memset(output, 0, sizeof(output));
     assert(write(master, "/help\r", 6) == 6);
     assert(read_until(master, output, sizeof(output), "Telos commands"));
+    memset(output, 0, sizeof(output));
     assert(write(master, "/quit\r", 6) == 6);
+    assert(read_until(master, output, sizeof(output), "\033[?2004l"));
     assert(waitpid(child, &status, 0) == child);
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);

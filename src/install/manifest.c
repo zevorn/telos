@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <telos/array.h>
 #include <telos/manifest.h>
 #include <telos/plugin.h>
 
@@ -408,10 +409,11 @@ static bool target_valid(const char *target)
 {
     static const char *targets[] = {
         "linux-x86_64", "linux-aarch64", "linux-riscv64",
+        "darwin-x86_64", "darwin-aarch64",
         "zephyr-arm64", "zephyr-native",
     };
 
-    for (size_t index = 0; index < 5; ++index) {
+    for (size_t index = 0; index < TELOS_ARRAY_SIZE(targets); ++index) {
         if (strcmp(target, targets[index]) == 0) {
             return true;
         }
