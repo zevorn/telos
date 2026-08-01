@@ -34,3 +34,10 @@ option(
     value: false,
     description: 'Build the credentialed OpenAI Responses smoke utility',
 )
+
+option(
+    'curl_transport',
+    type: 'feature',
+    value: 'auto',
+    description: 'Build the Linux libcurl Transport Plugin',
+)

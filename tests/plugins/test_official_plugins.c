@@ -11,10 +11,12 @@
 
 #include <telos/manifest.h>
 #include <telos/plugin.h>
+#include <telos/frontend.h>
 #include <telos/plugins/project_guidance.h>
 #include <telos/provider.h>
 #include <telos/resource.h>
 #include <telos/store.h>
+#include <telos/transport.h>
 
 static void discard_log(void *context, int level, const char *message)
 {
@@ -147,15 +149,20 @@ int main(int argc, char **argv)
         "filesystem.write",
         "network.https",
         "secret.use:provider.openai",
+        "terminal.interactive",
+        "network.http:loopback",
     };
     const char *plugin_ids[] = {
         "dev.zevorn.memory-store",   "dev.zevorn.ring-store",
         "dev.zevorn.markdown-store", "dev.zevorn.openai-responses",
         "dev.zevorn.agent-skills",   "dev.zevorn.project-guidance",
+        "dev.zevorn.terminal-frontend",
+        "dev.zevorn.curl-transport",
     };
+    size_t plugin_count;
     struct telos_registry *registry;
     struct telos_host_api_v1 host;
-    struct telos_plugin_module *modules[6] = {0};
+    struct telos_plugin_module *modules[8] = {0};
     struct telos_registry_generation *generation;
     struct telos_value *empty = telos_value_new_object(NULL, NULL, 0);
     struct telos_value *capacity = telos_value_new_integer(2);
@@ -183,14 +190,15 @@ int main(int argc, char **argv)
     struct telos_value *invalid_markdown =
         telos_value_new_object(markdown_keys, empty_path_values, 1);
 
-    assert(argc == 13);
+    assert(argc >= 13 && argc <= 17 && argc % 2 == 1);
+    plugin_count = ((size_t)argc - 1) / 2;
     assert(descriptor >= 0);
     close(descriptor);
     assert(telos_host_api_v1_initialize(&host, NULL, discard_log, NULL));
-    registry = telos_registry_create(capabilities, 4, NULL);
+    registry = telos_registry_create(capabilities, 6, NULL);
     assert(registry != NULL);
-    for (size_t index = 0; index < 6; ++index) {
-        verify_package(argv[index + 7], plugin_ids[index]);
+    for (size_t index = 0; index < plugin_count; ++index) {
+        verify_package(argv[index + plugin_count + 1], plugin_ids[index]);
         verify_entry_validation(argv[index + 1], &host);
         modules[index] = telos_plugin_module_load_inprocess(
             argv[index + 1], plugin_ids[index], &host, registry, NULL);
@@ -247,10 +255,30 @@ int main(int argc, char **argv)
         assert(definition->discover != NULL);
         assert(definition->free_string != NULL);
     }
+    if (plugin_count > 6) {
+        const struct telos_extension_descriptor *frontend = find_extension(
+            generation, TELOS_EXTENSION_FRONTEND, plugin_ids[6]);
+        const struct telos_frontend_definition_v1 *definition =
+            frontend->implementation;
+
+        assert(definition->struct_size >= sizeof(*definition));
+        assert(strcmp(definition->id, plugin_ids[6]) == 0);
+        assert(definition->run != NULL);
+    }
+    if (plugin_count > 7) {
+        const struct telos_extension_descriptor *transport = find_extension(
+            generation, TELOS_EXTENSION_TRANSPORT, plugin_ids[7]);
+        const struct telos_transport_definition_v1 *definition =
+            transport->implementation;
+
+        assert(definition->struct_size >= sizeof(*definition));
+        assert(strcmp(definition->id, plugin_ids[7]) == 0);
+        assert(definition->send != NULL);
+    }
 
     telos_registry_generation_release(generation);
     telos_registry_destroy(registry);
-    for (size_t index = 6; index > 0; --index) {
+    for (size_t index = plugin_count; index > 0; --index) {
         telos_plugin_module_destroy(modules[index - 1]);
     }
     telos_value_release(invalid_markdown);

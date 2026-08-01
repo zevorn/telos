@@ -1,0 +1,1514 @@
+#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
+
+#include <errno.h>
+#include <locale.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
+#include <wchar.h>
+
+#include <telos/plugins/terminal_frontend.h>
+
+#define TERMINAL_EVENT_CAPACITY 64U
+#define TERMINAL_EVENT_TEXT_SIZE 2048U
+#define TERMINAL_EVENT_NAME_SIZE 256U
+#define TERMINAL_STREAM_SIZE 8192U
+#define TERMINAL_MAXIMUM_COLUMNS 512U
+#define TERMINAL_MAXIMUM_EDITOR_ROWS 8U
+#define TERMINAL_RENDER_LINE_SIZE (TERMINAL_MAXIMUM_COLUMNS * 4U + 128U)
+#define TERMINAL_POLL_MILLISECONDS 80
+
+_Static_assert(TERMINAL_STREAM_SIZE >
+                   TERMINAL_EVENT_TEXT_SIZE + TERMINAL_MAXIMUM_COLUMNS,
+               "stream must hold an Event chunk and a partial row");
+
+enum queued_event_kind {
+    QUEUED_FRONTEND_EVENT = 1,
+    QUEUED_TURN_ERROR,
+    QUEUED_TURN_COMPLETED,
+};
+
+struct queued_event {
+    enum queued_event_kind kind;
+    enum telos_frontend_event_kind frontend_kind;
+    char text[TERMINAL_EVENT_TEXT_SIZE];
+    char name[TERMINAL_EVENT_NAME_SIZE];
+};
+
+struct terminal_state {
+    const struct telos_frontend_session *session;
+    int input_descriptor;
+    int output_descriptor;
+    size_t maximum_input_bytes;
+    bool color;
+    bool raw_enabled;
+    struct termios saved_terminal;
+
+    pthread_mutex_t queue_mutex;
+    pthread_cond_t queue_changed;
+    struct queued_event events[TERMINAL_EVENT_CAPACITY];
+    size_t event_head;
+    size_t event_count;
+    bool queue_shutdown;
+
+    pthread_t worker;
+    bool worker_active;
+    struct telos_cancel *cancel;
+    char active_prompt[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+    char queued_prompt[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+    bool prompt_queued;
+
+    char input[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+    size_t input_size;
+    size_t input_cursor;
+    char prior_prompt[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+    bool paste_active;
+    bool exit_requested;
+
+    char stream[TERMINAL_STREAM_SIZE];
+    size_t stream_size;
+    bool response_active;
+    bool response_first_line;
+    size_t rendered_rows;
+    size_t rendered_cursor_row;
+    unsigned int spinner;
+};
+
+struct editor_metrics {
+    size_t total_rows;
+    size_t cursor_row;
+    size_t cursor_column;
+};
+
+struct plain_context {
+    int output_descriptor;
+    bool response_started;
+};
+
+static void set_error(struct telos_error **error,
+                      enum telos_error_domain domain,
+                      int code,
+                      const char *message)
+{
+    if (error != NULL && *error == NULL) {
+        *error = telos_error_create(domain, code, message, NULL);
+    }
+}
+
+static bool write_all(int descriptor, const char *data, size_t size)
+{
+    while (size > 0) {
+        ssize_t written = write(descriptor, data, size);
+
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        if (written <= 0) {
+            return false;
+        }
+        data += (size_t)written;
+        size -= (size_t)written;
+    }
+    return true;
+}
+
+static bool write_text(int descriptor, const char *text)
+{
+    return write_all(descriptor, text, strlen(text));
+}
+
+static size_t copy_text(char *target, size_t target_size, const char *source)
+{
+    size_t size = source == NULL ? 0 : strlen(source);
+
+    if (target_size == 0) {
+        return 0;
+    }
+    if (size >= target_size) {
+        size = target_size - 1;
+    }
+    if (size > 0) {
+        memcpy(target, source, size);
+    }
+    target[size] = '\0';
+    return size;
+}
+
+static size_t utf8_character(const char *text, size_t size, int *columns)
+{
+    mbstate_t state = {0};
+    wchar_t value;
+    size_t length;
+    int width;
+
+    if (size == 0) {
+        *columns = 0;
+        return 0;
+    }
+    length = mbrtowc(&value, text, size, &state);
+    if (length == (size_t)-1 || length == (size_t)-2 || length == 0) {
+        *columns = 1;
+        return 1;
+    }
+    width = wcwidth(value);
+    *columns = width < 0 ? 1 : width;
+    return length;
+}
+
+static size_t visible_width(const char *text, size_t size)
+{
+    size_t offset = 0;
+    size_t width = 0;
+
+    while (offset < size) {
+        int columns;
+        size_t length = utf8_character(text + offset, size - offset, &columns);
+
+        if (length == 0) {
+            break;
+        }
+        width += (size_t)columns;
+        offset += length;
+    }
+    return width;
+}
+
+static size_t bytes_for_width(const char *text, size_t size, size_t maximum)
+{
+    size_t offset = 0;
+    size_t width = 0;
+
+    while (offset < size) {
+        int columns;
+        size_t length = utf8_character(text + offset, size - offset, &columns);
+
+        if (length == 0 || width + (size_t)columns > maximum) {
+            break;
+        }
+        width += (size_t)columns;
+        offset += length;
+    }
+    return offset;
+}
+
+static size_t previous_character(const char *text, size_t offset)
+{
+    if (offset == 0) {
+        return 0;
+    }
+    --offset;
+    while (offset > 0 && ((unsigned char)text[offset] & 0xc0U) == 0x80U) {
+        --offset;
+    }
+    return offset;
+}
+
+static size_t next_character(const char *text, size_t size, size_t offset)
+{
+    int columns;
+    size_t length;
+
+    if (offset >= size) {
+        return size;
+    }
+    length = utf8_character(text + offset, size - offset, &columns);
+    return length == 0 ? size : offset + length;
+}
+
+static size_t terminal_columns(const struct terminal_state *state)
+{
+    struct winsize size = {0};
+    size_t columns = 80;
+
+    if (ioctl(state->output_descriptor, TIOCGWINSZ, &size) == 0 &&
+        size.ws_col > 0) {
+        columns = size.ws_col;
+    }
+    if (columns < 20) {
+        columns = 20;
+    }
+    if (columns > TERMINAL_MAXIMUM_COLUMNS) {
+        columns = TERMINAL_MAXIMUM_COLUMNS;
+    }
+    return columns;
+}
+
+static void begin_frame(struct terminal_state *state)
+{
+    write_text(state->output_descriptor, "\033[?2026h");
+}
+
+static void end_frame(struct terminal_state *state)
+{
+    write_text(state->output_descriptor, "\033[?2026l");
+}
+
+static void clear_dynamic(struct terminal_state *state)
+{
+    char sequence[64];
+    int size;
+
+    if (state->rendered_rows == 0) {
+        return;
+    }
+    write_text(state->output_descriptor, "\r");
+    if (state->rendered_cursor_row > 0) {
+        size = snprintf(sequence, sizeof(sequence), "\033[%zuA",
+                        state->rendered_cursor_row);
+        write_all(state->output_descriptor, sequence, (size_t)size);
+    }
+    write_text(state->output_descriptor, "\033[0J");
+    state->rendered_rows = 0;
+    state->rendered_cursor_row = 0;
+}
+
+static bool write_render_line(struct terminal_state *state, const char *line,
+                              bool final)
+{
+    return write_text(state->output_descriptor, line) &&
+           write_text(state->output_descriptor, "\033[0m\033[K") &&
+           (final || write_text(state->output_descriptor, "\r\n"));
+}
+
+static void append_bytes(char *line, size_t line_size, size_t *used,
+                         const char *text, size_t size)
+{
+    if (*used >= line_size - 1) {
+        return;
+    }
+    if (size > line_size - *used - 1) {
+        size = line_size - *used - 1;
+    }
+    memcpy(line + *used, text, size);
+    *used += size;
+    line[*used] = '\0';
+}
+
+static void append_text(char *line, size_t line_size, size_t *used,
+                        const char *text)
+{
+    append_bytes(line, line_size, used, text, strlen(text));
+}
+
+static void append_repeat(char *line, size_t line_size, size_t *used,
+                          const char *text, size_t count)
+{
+    for (size_t index = 0; index < count; ++index) {
+        append_text(line, line_size, used, text);
+    }
+}
+
+static void editor_metrics(const struct terminal_state *state,
+                           size_t content_width,
+                           struct editor_metrics *metrics)
+{
+    size_t offset = 0;
+    size_t row = 0;
+    size_t column = 0;
+    bool cursor_found = false;
+
+    memset(metrics, 0, sizeof(*metrics));
+    while (offset < state->input_size) {
+        int columns;
+        size_t length;
+
+        if (!cursor_found && offset == state->input_cursor) {
+            metrics->cursor_row = row;
+            metrics->cursor_column = column;
+            cursor_found = true;
+        }
+        if (state->input[offset] == '\n') {
+            ++row;
+            column = 0;
+            ++offset;
+            continue;
+        }
+        length = utf8_character(state->input + offset,
+                                state->input_size - offset, &columns);
+        if (column > 0 && column + (size_t)columns > content_width) {
+            ++row;
+            column = 0;
+            continue;
+        }
+        column += (size_t)columns;
+        offset += length;
+    }
+    if (!cursor_found) {
+        metrics->cursor_row = row;
+        metrics->cursor_column = column;
+    }
+    metrics->total_rows = row + 1;
+}
+
+static bool write_border(struct terminal_state *state, size_t columns,
+                         bool top)
+{
+    char line[TERMINAL_RENDER_LINE_SIZE] = {0};
+    size_t used = 0;
+
+    if (state->color) {
+        append_text(line, sizeof(line), &used,
+                    state->worker_active ? "\033[38;5;214m"
+                                         : "\033[38;5;75m");
+    }
+    append_text(line, sizeof(line), &used, top ? "╭" : "╰");
+    append_repeat(line, sizeof(line), &used, "─", columns - 2);
+    append_text(line, sizeof(line), &used, top ? "╮" : "╯");
+    return write_render_line(state, line, false);
+}
+
+static bool write_editor_row(struct terminal_state *state, const char *text,
+                             size_t size, size_t width)
+{
+    char line[TERMINAL_RENDER_LINE_SIZE] = {0};
+    size_t used = 0;
+    size_t cells = visible_width(text, size);
+
+    if (state->color) {
+        append_text(line, sizeof(line), &used, "\033[38;5;75m");
+    }
+    append_text(line, sizeof(line), &used, "│ ");
+    if (state->color) {
+        append_text(line, sizeof(line), &used, "\033[0m");
+    }
+    append_bytes(line, sizeof(line), &used, text, size);
+    append_repeat(line, sizeof(line), &used, " ", width - cells);
+    if (state->color) {
+        append_text(line, sizeof(line), &used, "\033[38;5;75m");
+    }
+    append_text(line, sizeof(line), &used, " │");
+    return write_render_line(state, line, false);
+}
+
+static bool render_editor_rows(struct terminal_state *state,
+                               size_t content_width,
+                               size_t first_row,
+                               size_t last_row)
+{
+    size_t offset = 0;
+    size_t row = 0;
+    size_t segment_start = 0;
+    size_t column = 0;
+
+    while (offset < state->input_size) {
+        int columns;
+        size_t length;
+        bool newline = state->input[offset] == '\n';
+
+        if (newline) {
+            if (row >= first_row && row <= last_row &&
+                !write_editor_row(state, state->input + segment_start,
+                                  offset - segment_start, content_width)) {
+                return false;
+            }
+            ++row;
+            ++offset;
+            segment_start = offset;
+            column = 0;
+            continue;
+        }
+        length = utf8_character(state->input + offset,
+                                state->input_size - offset, &columns);
+        if (column > 0 && column + (size_t)columns > content_width) {
+            if (row >= first_row && row <= last_row &&
+                !write_editor_row(state, state->input + segment_start,
+                                  offset - segment_start, content_width)) {
+                return false;
+            }
+            ++row;
+            segment_start = offset;
+            column = 0;
+            continue;
+        }
+        column += (size_t)columns;
+        offset += length;
+    }
+    if (row >= first_row && row <= last_row) {
+        return write_editor_row(state, state->input + segment_start,
+                                state->input_size - segment_start,
+                                content_width);
+    }
+    return true;
+}
+
+static void sanitize_label(char *target, size_t target_size,
+                           const char *source)
+{
+    size_t used = 0;
+
+    if (target_size == 0) {
+        return;
+    }
+    for (size_t index = 0; source != NULL && source[index] != '\0' &&
+                           used + 1 < target_size;
+         ++index) {
+        unsigned char value = (unsigned char)source[index];
+
+        target[used++] = value < 0x20U || value == 0x7fU ? '?' : (char)value;
+    }
+    target[used] = '\0';
+}
+
+static bool write_footer(struct terminal_state *state, size_t columns,
+                         bool final)
+{
+    static const char *const spinners[] = {"⠋", "⠙", "⠹", "⠸",
+                                            "⠼", "⠴", "⠦", "⠧"};
+    char working[256];
+    char provider[128];
+    char model[128];
+    char footer[TERMINAL_RENDER_LINE_SIZE] = {0};
+    char visible[TERMINAL_RENDER_LINE_SIZE] = {0};
+    size_t used = 0;
+    size_t size;
+
+    sanitize_label(working, sizeof(working), state->session->working_directory);
+    sanitize_label(provider, sizeof(provider), state->session->provider);
+    sanitize_label(model, sizeof(model), state->session->model);
+    snprintf(visible, sizeof(visible), "%s · %s/%s · %s", working, provider,
+             model,
+             state->worker_active
+                 ? spinners[state->spinner %
+                            (sizeof(spinners) / sizeof(spinners[0]))]
+                 : "ready");
+    size = bytes_for_width(visible, strlen(visible), columns);
+    if (state->color) {
+        append_text(footer, sizeof(footer), &used, "\033[38;5;245m");
+    }
+    append_bytes(footer, sizeof(footer), &used, visible, size);
+    return write_render_line(state, footer, final);
+}
+
+static bool render_dynamic(struct terminal_state *state)
+{
+    struct editor_metrics metrics;
+    size_t columns = terminal_columns(state);
+    size_t content_width = columns - 4;
+    size_t first_row;
+    size_t last_row;
+    size_t response_rows = state->stream_size > 0 ? 1 : 0;
+    size_t editor_rows;
+    size_t total_rows;
+    char response[TERMINAL_RENDER_LINE_SIZE] = {0};
+    size_t response_used = 0;
+    char sequence[64];
+    int sequence_size;
+
+    editor_metrics(state, content_width, &metrics);
+    first_row = metrics.cursor_row >= TERMINAL_MAXIMUM_EDITOR_ROWS
+                    ? metrics.cursor_row - TERMINAL_MAXIMUM_EDITOR_ROWS + 1
+                    : 0;
+    if (first_row + TERMINAL_MAXIMUM_EDITOR_ROWS > metrics.total_rows) {
+        first_row = metrics.total_rows > TERMINAL_MAXIMUM_EDITOR_ROWS
+                        ? metrics.total_rows - TERMINAL_MAXIMUM_EDITOR_ROWS
+                        : 0;
+    }
+    last_row = first_row + TERMINAL_MAXIMUM_EDITOR_ROWS - 1;
+    if (last_row >= metrics.total_rows) {
+        last_row = metrics.total_rows - 1;
+    }
+    editor_rows = last_row - first_row + 1;
+    total_rows = response_rows + editor_rows + 3;
+
+    begin_frame(state);
+    clear_dynamic(state);
+    if (state->stream_size > 0) {
+        if (state->color) {
+            append_text(response, sizeof(response), &response_used,
+                        "\033[38;5;75m");
+        }
+        append_text(response, sizeof(response), &response_used,
+                    state->response_first_line ? "Telos › " : "        ");
+        if (state->color) {
+            append_text(response, sizeof(response), &response_used,
+                        "\033[0m");
+        }
+        append_bytes(response, sizeof(response), &response_used, state->stream,
+                     state->stream_size);
+        if (!write_render_line(state, response, false)) {
+            end_frame(state);
+            return false;
+        }
+    }
+    if (!write_border(state, columns, true) ||
+        !render_editor_rows(state, content_width, first_row, last_row) ||
+        !write_border(state, columns, false) ||
+        !write_footer(state, columns, true)) {
+        end_frame(state);
+        return false;
+    }
+
+    state->rendered_rows = total_rows;
+    state->rendered_cursor_row =
+        response_rows + 1 + (metrics.cursor_row - first_row);
+    write_text(state->output_descriptor, "\r");
+    if (total_rows - 1 > state->rendered_cursor_row) {
+        sequence_size = snprintf(sequence, sizeof(sequence), "\033[%zuA",
+                                 total_rows - 1 - state->rendered_cursor_row);
+        write_all(state->output_descriptor, sequence,
+                  (size_t)sequence_size);
+    }
+    sequence_size = snprintf(sequence, sizeof(sequence), "\033[%zuC",
+                             metrics.cursor_column + 2);
+    write_all(state->output_descriptor, sequence, (size_t)sequence_size);
+    end_frame(state);
+    return true;
+}
+
+static void write_sanitized(struct terminal_state *state, const char *text,
+                            size_t size)
+{
+    size_t start = 0;
+
+    for (size_t index = 0; index < size; ++index) {
+        unsigned char value = (unsigned char)text[index];
+
+        if (value >= 0x20U && value != 0x7fU) {
+            continue;
+        }
+        if (index > start) {
+            write_all(state->output_descriptor, text + start, index - start);
+        }
+        if (value == '\t') {
+            write_text(state->output_descriptor, "    ");
+        }
+        start = index + 1;
+    }
+    if (size > start) {
+        write_all(state->output_descriptor, text + start, size - start);
+    }
+}
+
+static void write_response_segment(struct terminal_state *state,
+                                   const char *text, size_t size)
+{
+    if (state->color) {
+        write_text(state->output_descriptor, "\033[38;5;75m");
+    }
+    write_text(state->output_descriptor,
+               state->response_first_line ? "Telos › " : "        ");
+    if (state->color) {
+        write_text(state->output_descriptor, "\033[0m");
+    }
+    write_sanitized(state, text, size);
+    write_text(state->output_descriptor, "\033[0m\033[K\r\n");
+    state->response_first_line = false;
+}
+
+static void flush_stream(struct terminal_state *state, bool force)
+{
+    size_t columns = terminal_columns(state);
+
+    while (state->stream_size > 0) {
+        size_t width = columns - 8;
+        char *newline = memchr(state->stream, '\n', state->stream_size);
+        size_t newline_size = newline == NULL
+                                  ? state->stream_size
+                                  : (size_t)(newline - state->stream);
+        size_t segment = bytes_for_width(state->stream, newline_size, width);
+        bool complete_width = visible_width(state->stream, segment) >= width;
+
+        if (newline != NULL && segment == newline_size) {
+            write_response_segment(state, state->stream, segment);
+            memmove(state->stream, state->stream + segment + 1,
+                    state->stream_size - segment - 1);
+            state->stream_size -= segment + 1;
+            continue;
+        }
+        if (complete_width) {
+            write_response_segment(state, state->stream, segment);
+            memmove(state->stream, state->stream + segment,
+                    state->stream_size - segment);
+            state->stream_size -= segment;
+            continue;
+        }
+        if (force) {
+            write_response_segment(state, state->stream, state->stream_size);
+            state->stream_size = 0;
+        }
+        break;
+    }
+    state->stream[state->stream_size] = '\0';
+}
+
+static void stream_text(struct terminal_state *state, const char *text)
+{
+    for (size_t index = 0; text[index] != '\0'; ++index) {
+        unsigned char value = (unsigned char)text[index];
+
+        if (value == '\r') {
+            continue;
+        }
+        if (value < 0x20U && value != '\n' && value != '\t') {
+            continue;
+        }
+        if (value == 0x7fU) {
+            continue;
+        }
+        state->stream[state->stream_size++] = value == '\t' ? ' ' : (char)value;
+    }
+    state->stream[state->stream_size] = '\0';
+    flush_stream(state, false);
+}
+
+static void write_status_line(struct terminal_state *state, const char *symbol,
+                              const char *name, const char *color)
+{
+    const char *label = name == NULL || name[0] == '\0' ? "tool" : name;
+
+    if (color != NULL) {
+        write_text(state->output_descriptor, color);
+    }
+    write_text(state->output_descriptor, symbol);
+    write_text(state->output_descriptor, " ");
+    write_sanitized(state, label, strlen(label));
+    write_text(state->output_descriptor, "\033[0m\033[K\r\n");
+}
+
+static bool queue_push(struct terminal_state *state,
+                       const struct queued_event *event)
+{
+    bool result = true;
+
+    pthread_mutex_lock(&state->queue_mutex);
+    while (state->event_count == TERMINAL_EVENT_CAPACITY &&
+           !state->queue_shutdown) {
+        pthread_cond_wait(&state->queue_changed, &state->queue_mutex);
+    }
+    if (state->queue_shutdown) {
+        result = false;
+    } else {
+        size_t tail =
+            (state->event_head + state->event_count) % TERMINAL_EVENT_CAPACITY;
+
+        state->events[tail] = *event;
+        state->event_count += 1;
+        pthread_cond_broadcast(&state->queue_changed);
+    }
+    pthread_mutex_unlock(&state->queue_mutex);
+    return result;
+}
+
+static bool queue_pop(struct terminal_state *state, struct queued_event *event)
+{
+    bool result = false;
+
+    pthread_mutex_lock(&state->queue_mutex);
+    if (state->event_count > 0) {
+        *event = state->events[state->event_head];
+        state->event_head =
+            (state->event_head + 1) % TERMINAL_EVENT_CAPACITY;
+        state->event_count -= 1;
+        pthread_cond_broadcast(&state->queue_changed);
+        result = true;
+    }
+    pthread_mutex_unlock(&state->queue_mutex);
+    return result;
+}
+
+static bool queue_frontend_event(const struct telos_frontend_event *event,
+                                 void *context,
+                                 struct telos_error **error)
+{
+    struct terminal_state *state = context;
+    const char *text;
+    size_t size;
+
+    if (event == NULL || state == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Terminal Frontend Event is invalid");
+        return false;
+    }
+    text = event->text == NULL ? "" : event->text;
+    size = strlen(text);
+    do {
+        struct queued_event queued = {
+            .kind = QUEUED_FRONTEND_EVENT,
+            .frontend_kind = event->kind,
+        };
+        size_t chunk = size;
+
+        if (chunk >= sizeof(queued.text)) {
+            chunk = sizeof(queued.text) - 1;
+        }
+        if (chunk > 0) {
+            memcpy(queued.text, text, chunk);
+            queued.text[chunk] = '\0';
+        }
+        copy_text(queued.name, sizeof(queued.name), event->name);
+        if (!queue_push(state, &queued)) {
+            set_error(error, TELOS_ERROR_DOMAIN_CANCELLED, ECANCELED,
+                      "Terminal Frontend stopped accepting Events");
+            return false;
+        }
+        text += chunk;
+        size -= chunk;
+    } while (size > 0);
+    return true;
+}
+
+static void *run_turn(void *context)
+{
+    struct terminal_state *state = context;
+    struct telos_error *error = NULL;
+    bool result = state->session->turn(
+        state->active_prompt, state->cancel, queue_frontend_event, state,
+        state->session->turn_context, &error);
+
+    if (!result) {
+        struct queued_event failed = {
+            .kind = QUEUED_TURN_ERROR,
+        };
+
+        copy_text(failed.text, sizeof(failed.text),
+                  error == NULL ? "Agent turn failed"
+                                : telos_error_message(error));
+        queue_push(state, &failed);
+    }
+    {
+        const struct queued_event completed = {
+            .kind = QUEUED_TURN_COMPLETED,
+        };
+
+        queue_push(state, &completed);
+    }
+    telos_error_release(error);
+    return NULL;
+}
+
+static void write_user_prompt(struct terminal_state *state, const char *prompt)
+{
+    if (state->color) {
+        write_text(state->output_descriptor, "\033[38;5;110m");
+    }
+    write_text(state->output_descriptor, "You   › ");
+    if (state->color) {
+        write_text(state->output_descriptor, "\033[0m");
+    }
+    for (size_t index = 0; prompt[index] != '\0'; ++index) {
+        if (prompt[index] == '\n') {
+            write_text(state->output_descriptor, "\033[K\r\n        ");
+        } else {
+            write_sanitized(state, prompt + index, 1);
+        }
+    }
+    write_text(state->output_descriptor, "\033[0m\033[K\r\n\r\n");
+}
+
+static void show_help(struct terminal_state *state)
+{
+    begin_frame(state);
+    clear_dynamic(state);
+    write_text(state->output_descriptor,
+               "Telos commands\r\n"
+               "  /help   show this help\r\n"
+               "  /clear  clear the Agent conversation\r\n"
+               "  /quit   leave Telos\r\n"
+               "\r\n"
+               "Enter submits · Ctrl+J or Alt+Enter adds a line · "
+               "Esc cancels\r\n\r\n");
+    end_frame(state);
+}
+
+static bool start_turn(struct terminal_state *state, const char *prompt,
+                       struct telos_error **error)
+{
+    int result;
+
+    if (strcmp(prompt, "/quit") == 0 || strcmp(prompt, "/exit") == 0) {
+        state->exit_requested = true;
+        return true;
+    }
+    if (strcmp(prompt, "/help") == 0) {
+        show_help(state);
+        return true;
+    }
+    if (state->worker_active) {
+        if (state->prompt_queued) {
+            write_all(state->output_descriptor, "\a", 1);
+            return true;
+        }
+        copy_text(state->queued_prompt, sizeof(state->queued_prompt), prompt);
+        state->prompt_queued = true;
+        return true;
+    }
+
+    begin_frame(state);
+    clear_dynamic(state);
+    write_user_prompt(state, prompt);
+    end_frame(state);
+    copy_text(state->active_prompt, sizeof(state->active_prompt), prompt);
+    copy_text(state->prior_prompt, sizeof(state->prior_prompt), prompt);
+    state->response_active = false;
+    state->response_first_line = true;
+    state->stream_size = 0;
+    state->cancel = telos_cancel_create();
+    if (state->cancel == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Terminal turn cancellation allocation failed");
+        return false;
+    }
+    result = pthread_create(&state->worker, NULL, run_turn, state);
+    if (result != 0) {
+        telos_cancel_release(state->cancel);
+        state->cancel = NULL;
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, result,
+                  "Terminal Agent worker could not be started");
+        return false;
+    }
+    state->worker_active = true;
+    return true;
+}
+
+static void handle_frontend_event(struct terminal_state *state,
+                                  const struct queued_event *event)
+{
+    switch (event->frontend_kind) {
+    case TELOS_FRONTEND_RESPONSE_STARTED:
+        state->response_active = true;
+        state->response_first_line = true;
+        break;
+    case TELOS_FRONTEND_TEXT_DELTA:
+        state->response_active = true;
+        stream_text(state, event->text);
+        break;
+    case TELOS_FRONTEND_TOOL_STARTED:
+        flush_stream(state, true);
+        write_status_line(state, "◆", event->name,
+                          state->color ? "\033[38;5;214m" : NULL);
+        break;
+    case TELOS_FRONTEND_TOOL_COMPLETED:
+        flush_stream(state, true);
+        write_status_line(state, "✓", event->name,
+                          state->color ? "\033[38;5;78m" : NULL);
+        break;
+    case TELOS_FRONTEND_TOOL_FAILED:
+        flush_stream(state, true);
+        write_status_line(state, "✗", event->name,
+                          state->color ? "\033[38;5;203m" : NULL);
+        break;
+    case TELOS_FRONTEND_NOTICE:
+        flush_stream(state, true);
+        write_status_line(state, "•", event->text,
+                          state->color ? "\033[38;5;245m" : NULL);
+        break;
+    default:
+        break;
+    }
+}
+
+static bool drain_events(struct terminal_state *state,
+                         struct telos_error **error)
+{
+    struct queued_event event;
+    bool handled = false;
+
+    while (queue_pop(state, &event)) {
+        if (!handled) {
+            begin_frame(state);
+            clear_dynamic(state);
+            handled = true;
+        }
+        if (event.kind == QUEUED_FRONTEND_EVENT) {
+            handle_frontend_event(state, &event);
+        } else if (event.kind == QUEUED_TURN_ERROR) {
+            flush_stream(state, true);
+            write_status_line(state, "✗", event.text,
+                              state->color ? "\033[38;5;203m" : NULL);
+        } else if (event.kind == QUEUED_TURN_COMPLETED) {
+            flush_stream(state, true);
+            if (state->response_active) {
+                write_text(state->output_descriptor, "\r\n");
+            }
+            if (pthread_join(state->worker, NULL) != 0) {
+                set_error(error, TELOS_ERROR_DOMAIN_STATE, EIO,
+                          "Terminal Agent worker could not be joined");
+                end_frame(state);
+                return false;
+            }
+            state->worker_active = false;
+            state->response_active = false;
+            telos_cancel_release(state->cancel);
+            state->cancel = NULL;
+            if (state->prompt_queued) {
+                char prompt[sizeof(state->queued_prompt)];
+
+                copy_text(prompt, sizeof(prompt), state->queued_prompt);
+                state->prompt_queued = false;
+                state->queued_prompt[0] = '\0';
+                end_frame(state);
+                if (!start_turn(state, prompt, error)) {
+                    return false;
+                }
+                handled = false;
+            }
+        }
+    }
+    if (handled) {
+        end_frame(state);
+    }
+    return true;
+}
+
+static bool editor_insert(struct terminal_state *state, const char *text,
+                          size_t size)
+{
+    if (size > state->maximum_input_bytes - state->input_size) {
+        write_all(state->output_descriptor, "\a", 1);
+        return false;
+    }
+    memmove(state->input + state->input_cursor + size,
+            state->input + state->input_cursor,
+            state->input_size - state->input_cursor + 1);
+    memcpy(state->input + state->input_cursor, text, size);
+    state->input_cursor += size;
+    state->input_size += size;
+    return true;
+}
+
+static void editor_backspace(struct terminal_state *state)
+{
+    size_t prior = previous_character(state->input, state->input_cursor);
+
+    if (prior == state->input_cursor) {
+        return;
+    }
+    memmove(state->input + prior, state->input + state->input_cursor,
+            state->input_size - state->input_cursor + 1);
+    state->input_size -= state->input_cursor - prior;
+    state->input_cursor = prior;
+}
+
+static void editor_delete(struct terminal_state *state)
+{
+    size_t next = next_character(state->input, state->input_size,
+                                 state->input_cursor);
+
+    if (next == state->input_cursor) {
+        return;
+    }
+    memmove(state->input + state->input_cursor, state->input + next,
+            state->input_size - next + 1);
+    state->input_size -= next - state->input_cursor;
+}
+
+static void editor_clear(struct terminal_state *state)
+{
+    state->input[0] = '\0';
+    state->input_size = 0;
+    state->input_cursor = 0;
+}
+
+static bool submit_editor(struct terminal_state *state,
+                          struct telos_error **error)
+{
+    char prompt[sizeof(state->input)];
+
+    if (state->input_size == 0) {
+        return true;
+    }
+    memcpy(prompt, state->input, state->input_size + 1);
+    editor_clear(state);
+    return start_turn(state, prompt, error);
+}
+
+static bool key_sequence(const char *data, size_t size, const char *sequence)
+{
+    size_t sequence_size = strlen(sequence);
+
+    return size >= sequence_size && memcmp(data, sequence, sequence_size) == 0;
+}
+
+static size_t handle_key(struct terminal_state *state, const char *data,
+                         size_t size, struct telos_error **error)
+{
+    if (key_sequence(data, size, "\033[200~")) {
+        state->paste_active = true;
+        return 6;
+    }
+    if (key_sequence(data, size, "\033[201~")) {
+        state->paste_active = false;
+        return 6;
+    }
+    if (state->paste_active) {
+        char value = data[0] == '\r' ? '\n' : data[0];
+
+        if (value == '\n' || (unsigned char)value >= 0x20U) {
+            editor_insert(state, &value, 1);
+        }
+        return 1;
+    }
+    if (key_sequence(data, size, "\033[13;2u") ||
+        key_sequence(data, size, "\033\r")) {
+        editor_insert(state, "\n", 1);
+        return data[1] == '\r' ? 2 : 7;
+    }
+    if (key_sequence(data, size, "\033[A")) {
+        if (state->input_size == 0 && state->prior_prompt[0] != '\0') {
+            state->input_size = copy_text(state->input, sizeof(state->input),
+                                          state->prior_prompt);
+            state->input_cursor = state->input_size;
+        }
+        return 3;
+    }
+    if (key_sequence(data, size, "\033[B")) {
+        editor_clear(state);
+        return 3;
+    }
+    if (key_sequence(data, size, "\033[C")) {
+        state->input_cursor = next_character(
+            state->input, state->input_size, state->input_cursor);
+        return 3;
+    }
+    if (key_sequence(data, size, "\033[D")) {
+        state->input_cursor =
+            previous_character(state->input, state->input_cursor);
+        return 3;
+    }
+    if (key_sequence(data, size, "\033[H") ||
+        key_sequence(data, size, "\033[1~")) {
+        state->input_cursor = 0;
+        return 3;
+    }
+    if (key_sequence(data, size, "\033[F") ||
+        key_sequence(data, size, "\033[4~")) {
+        state->input_cursor = state->input_size;
+        return 3;
+    }
+    if (key_sequence(data, size, "\033[3~")) {
+        editor_delete(state);
+        return 4;
+    }
+    if ((unsigned char)data[0] == 0x03U || data[0] == '\033') {
+        if (state->worker_active && state->cancel != NULL) {
+            telos_cancel_request(state->cancel);
+        } else if (state->input_size > 0) {
+            editor_clear(state);
+        } else {
+            state->exit_requested = true;
+        }
+        return 1;
+    }
+    if (data[0] == '\r') {
+        submit_editor(state, error);
+        return 1;
+    }
+    if (data[0] == '\n') {
+        editor_insert(state, "\n", 1);
+        return 1;
+    }
+    if ((unsigned char)data[0] == 0x7fU || data[0] == '\b') {
+        editor_backspace(state);
+        return 1;
+    }
+    if ((unsigned char)data[0] >= 0x20U) {
+        int columns;
+        size_t length = utf8_character(data, size, &columns);
+
+        editor_insert(state, data, length);
+        return length;
+    }
+    return 1;
+}
+
+static bool handle_input(struct terminal_state *state,
+                         struct telos_error **error)
+{
+    char input[256];
+    ssize_t size = read(state->input_descriptor, input, sizeof(input));
+    size_t offset = 0;
+
+    if (size < 0 && (errno == EINTR || errno == EAGAIN)) {
+        return true;
+    }
+    if (size < 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Terminal input could not be read");
+        return false;
+    }
+    if (size == 0) {
+        state->exit_requested = true;
+        if (state->cancel != NULL) {
+            telos_cancel_request(state->cancel);
+        }
+        return true;
+    }
+    while (offset < (size_t)size) {
+        size_t consumed =
+            handle_key(state, input + offset, (size_t)size - offset, error);
+
+        if (consumed == 0) {
+            break;
+        }
+        offset += consumed;
+    }
+    return error == NULL || *error == NULL;
+}
+
+static bool enable_raw_mode(struct terminal_state *state,
+                            struct telos_error **error)
+{
+    struct termios terminal;
+
+    if (tcgetattr(state->input_descriptor, &state->saved_terminal) != 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Terminal settings could not be read");
+        return false;
+    }
+    terminal = state->saved_terminal;
+    terminal.c_iflag &=
+        (tcflag_t) ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    terminal.c_oflag &= (tcflag_t)~OPOST;
+    terminal.c_cflag |= CS8;
+    terminal.c_lflag &= (tcflag_t) ~(ECHO | ICANON | IEXTEN | ISIG);
+    terminal.c_cc[VMIN] = 0;
+    terminal.c_cc[VTIME] = 0;
+    if (tcsetattr(state->input_descriptor, TCSAFLUSH, &terminal) != 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Terminal raw mode could not be enabled");
+        return false;
+    }
+    state->raw_enabled = true;
+    write_text(state->output_descriptor, "\033[?2004h");
+    return true;
+}
+
+static void disable_raw_mode(struct terminal_state *state)
+{
+    if (!state->raw_enabled) {
+        return;
+    }
+    begin_frame(state);
+    clear_dynamic(state);
+    write_text(state->output_descriptor, "\033[?2004l\033[0m\033[?25h");
+    end_frame(state);
+    tcsetattr(state->input_descriptor, TCSAFLUSH, &state->saved_terminal);
+    state->raw_enabled = false;
+}
+
+static void write_header(struct terminal_state *state)
+{
+    char application[64];
+    char version[32];
+    char provider[128];
+    char model[128];
+
+    sanitize_label(application, sizeof(application),
+                   state->session->application);
+    sanitize_label(version, sizeof(version), state->session->version);
+    sanitize_label(provider, sizeof(provider), state->session->provider);
+    sanitize_label(model, sizeof(model), state->session->model);
+    if (state->color) {
+        write_text(state->output_descriptor, "\033[1;38;5;75m");
+    }
+    write_text(state->output_descriptor, application);
+    write_text(state->output_descriptor, " ");
+    write_text(state->output_descriptor, version);
+    write_text(state->output_descriptor, "\033[0m\r\n");
+    write_text(state->output_descriptor, "Provider: ");
+    write_text(state->output_descriptor, provider);
+    write_text(state->output_descriptor, " · Model: ");
+    write_text(state->output_descriptor, model);
+    write_text(state->output_descriptor,
+               "\r\nType /help for commands. Esc cancels the active turn.\r\n"
+               "\r\n");
+}
+
+static bool run_interactive(struct terminal_state *state,
+                            struct telos_error **error)
+{
+    struct pollfd descriptor = {
+        .fd = state->input_descriptor,
+        .events = POLLIN,
+    };
+    bool result = false;
+
+    if (!enable_raw_mode(state, error)) {
+        return false;
+    }
+    write_header(state);
+    if (state->session->initial_prompt != NULL &&
+        state->session->initial_prompt[0] != '\0' &&
+        !start_turn(state, state->session->initial_prompt, error)) {
+        goto cleanup;
+    }
+    while (!state->exit_requested || state->worker_active) {
+        int ready;
+
+        if (!drain_events(state, error) ||
+            (error != NULL && *error != NULL)) {
+            goto cleanup;
+        }
+        state->spinner += 1;
+        if (!render_dynamic(state)) {
+            set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                      "Terminal frame could not be rendered");
+            goto cleanup;
+        }
+        ready = poll(&descriptor, 1, TERMINAL_POLL_MILLISECONDS);
+        if (ready < 0 && errno == EINTR) {
+            continue;
+        }
+        if (ready < 0) {
+            set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                      "Terminal input polling failed");
+            goto cleanup;
+        }
+        if (ready > 0 && (descriptor.revents & (POLLIN | POLLHUP)) != 0 &&
+            !handle_input(state, error)) {
+            goto cleanup;
+        }
+    }
+    result = true;
+
+cleanup:
+    state->prompt_queued = false;
+    if (state->worker_active && state->cancel != NULL) {
+        telos_cancel_request(state->cancel);
+        while (state->worker_active && drain_events(state, NULL)) {
+            struct timespec delay = {
+                .tv_nsec = 1000000,
+            };
+
+            nanosleep(&delay, NULL);
+        }
+    }
+    disable_raw_mode(state);
+    return result;
+}
+
+static void plain_write_sanitized(int descriptor, const char *text)
+{
+    size_t start = 0;
+    size_t size = text == NULL ? 0 : strlen(text);
+
+    for (size_t index = 0; index < size; ++index) {
+        unsigned char value = (unsigned char)text[index];
+
+        if ((value >= 0x20U && value != 0x7fU) || value == '\n' ||
+            value == '\t') {
+            continue;
+        }
+        if (index > start) {
+            write_all(descriptor, text + start, index - start);
+        }
+        start = index + 1;
+    }
+    if (size > start) {
+        write_all(descriptor, text + start, size - start);
+    }
+}
+
+static bool plain_emit(const struct telos_frontend_event *event,
+                       void *context,
+                       struct telos_error **error)
+{
+    struct plain_context *plain = context;
+
+    (void)error;
+    if (event->kind == TELOS_FRONTEND_RESPONSE_STARTED) {
+        plain->response_started = true;
+        write_text(plain->output_descriptor, "Telos > ");
+    } else if (event->kind == TELOS_FRONTEND_TEXT_DELTA) {
+        if (!plain->response_started) {
+            plain->response_started = true;
+            write_text(plain->output_descriptor, "Telos > ");
+        }
+        plain_write_sanitized(plain->output_descriptor, event->text);
+    } else if (event->kind == TELOS_FRONTEND_TOOL_STARTED) {
+        write_text(plain->output_descriptor, "\n[tool] ");
+        plain_write_sanitized(plain->output_descriptor, event->name);
+        write_text(plain->output_descriptor, "\n");
+    } else if (event->kind == TELOS_FRONTEND_TOOL_COMPLETED) {
+        write_text(plain->output_descriptor, "\n[done] ");
+        plain_write_sanitized(plain->output_descriptor, event->name);
+        write_text(plain->output_descriptor, "\n");
+    } else if (event->kind == TELOS_FRONTEND_TOOL_FAILED) {
+        write_text(plain->output_descriptor, "\n[failed] ");
+        plain_write_sanitized(plain->output_descriptor, event->name);
+        write_text(plain->output_descriptor, "\n");
+    } else if (event->kind == TELOS_FRONTEND_NOTICE) {
+        write_text(plain->output_descriptor, "\n[notice] ");
+        plain_write_sanitized(plain->output_descriptor, event->text);
+        write_text(plain->output_descriptor, "\n");
+    }
+    return true;
+}
+
+static ssize_t read_plain_line(int descriptor, char *buffer, size_t capacity)
+{
+    size_t used = 0;
+
+    while (used + 1 < capacity) {
+        char value;
+        ssize_t result = read(descriptor, &value, 1);
+
+        if (result < 0 && errno == EINTR) {
+            continue;
+        }
+        if (result < 0) {
+            return -1;
+        }
+        if (result == 0) {
+            break;
+        }
+        if (value == '\n' || value == '\r') {
+            break;
+        }
+        if ((unsigned char)value >= 0x20U || value == '\t') {
+            buffer[used++] = value;
+        }
+    }
+    buffer[used] = '\0';
+    return (ssize_t)used;
+}
+
+static bool run_plain_turn(struct terminal_state *state, const char *line,
+                           struct telos_error **error)
+{
+    struct plain_context plain = {
+        .output_descriptor = state->output_descriptor,
+    };
+    struct telos_cancel *cancel = telos_cancel_create();
+    bool result;
+
+    if (cancel == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Terminal turn cancellation allocation failed");
+        return false;
+    }
+    result = state->session->turn(line, cancel, plain_emit, &plain,
+                                  state->session->turn_context, error);
+    telos_cancel_release(cancel);
+    write_text(state->output_descriptor, "\n");
+    return result;
+}
+
+static bool run_plain(struct terminal_state *state, struct telos_error **error)
+{
+    char line[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+
+    write_text(state->output_descriptor, "Telos ");
+    write_text(state->output_descriptor, state->session->version);
+    write_text(state->output_descriptor, "\n");
+    if (state->session->initial_prompt != NULL &&
+        state->session->initial_prompt[0] != '\0') {
+        write_text(state->output_descriptor, "You > ");
+        plain_write_sanitized(state->output_descriptor,
+                              state->session->initial_prompt);
+        write_text(state->output_descriptor, "\n");
+        if (!run_plain_turn(state, state->session->initial_prompt, error)) {
+            return false;
+        }
+        if (state->session->single_turn) {
+            return true;
+        }
+    }
+    while (true) {
+        ssize_t size;
+
+        write_text(state->output_descriptor, "You > ");
+        size = read_plain_line(state->input_descriptor, line,
+                               state->maximum_input_bytes + 1);
+        if (size < 0) {
+            set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                      "Terminal input could not be read");
+            return false;
+        }
+        if (size == 0) {
+            return true;
+        }
+        if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
+            return true;
+        }
+        if (strcmp(line, "/help") == 0) {
+            write_text(state->output_descriptor,
+                       "/help /clear /quit\n");
+            continue;
+        }
+        if (!run_plain_turn(state, line, error)) {
+            return false;
+        }
+    }
+}
+
+bool telos_terminal_frontend_run(const telos_terminal_frontend_config *config,
+                                 struct telos_error **error)
+{
+    struct terminal_state *state;
+    const char *term = getenv("TERM");
+    const char *no_color = getenv("NO_COLOR");
+    bool interactive;
+    bool result;
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (config == NULL || config->session == NULL ||
+        config->session->application == NULL ||
+        config->session->version == NULL || config->session->provider == NULL ||
+        config->session->model == NULL ||
+        config->session->working_directory == NULL ||
+        config->session->turn == NULL || config->input_descriptor < 0 ||
+        config->output_descriptor < 0 ||
+        config->maximum_input_bytes >
+            TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Terminal Frontend configuration is invalid");
+        return false;
+    }
+    state = calloc(1, sizeof(*state));
+    if (state == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Terminal Frontend allocation failed");
+        return false;
+    }
+    state->session = config->session;
+    state->input_descriptor = config->input_descriptor;
+    state->output_descriptor = config->output_descriptor;
+    state->maximum_input_bytes =
+        config->maximum_input_bytes == 0
+            ? TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES
+            : config->maximum_input_bytes;
+    state->response_first_line = true;
+    interactive = !config->force_plain && isatty(state->input_descriptor) &&
+                  isatty(state->output_descriptor);
+    state->color = interactive && no_color == NULL && term != NULL &&
+                   strcmp(term, "dumb") != 0;
+    pthread_mutex_init(&state->queue_mutex, NULL);
+    pthread_cond_init(&state->queue_changed, NULL);
+    setlocale(LC_CTYPE, "");
+
+    result = interactive ? run_interactive(state, error)
+                         : run_plain(state, error);
+
+    pthread_mutex_lock(&state->queue_mutex);
+    state->queue_shutdown = true;
+    pthread_cond_broadcast(&state->queue_changed);
+    pthread_mutex_unlock(&state->queue_mutex);
+    pthread_cond_destroy(&state->queue_changed);
+    pthread_mutex_destroy(&state->queue_mutex);
+    telos_cancel_release(state->cancel);
+    free(state);
+    return result;
+}
+
+bool telos_terminal_frontend_run_stdio(const telos_frontend_session *session,
+                                       struct telos_error **error)
+{
+    const struct telos_terminal_frontend_config config = {
+        .session = session,
+        .input_descriptor = STDIN_FILENO,
+        .output_descriptor = STDOUT_FILENO,
+    };
+
+    return telos_terminal_frontend_run(&config, error);
+}

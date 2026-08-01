@@ -195,6 +195,47 @@ foreach entry : openai_plugin_tests
     test(entry[0], plugin_test, suite: 'plugins')
 endforeach
 
+if terminal_frontend_available
+    test_terminal_frontend = executable(
+        'test-terminal-frontend',
+        'test_terminal_frontend.c',
+        dependencies: telos_terminal_frontend_plugin_dep,
+    )
+
+    test(
+        'terminal-frontend',
+        test_terminal_frontend,
+        suite: 'plugins',
+    )
+
+    test_terminal_tui = executable(
+        'test-terminal-tui',
+        'test_terminal_tui.c',
+        dependencies: telos_terminal_frontend_plugin_dep,
+    )
+
+    test(
+        'terminal-tui',
+        test_terminal_tui,
+        suite: 'plugins',
+        timeout: 10,
+    )
+endif
+
+if curl_transport_available
+    test_curl_transport = executable(
+        'test-curl-transport',
+        'test_curl_transport.c',
+        dependencies: telos_curl_transport_plugin_dep,
+    )
+
+    test(
+        'curl-transport',
+        test_curl_transport,
+        suite: 'plugins',
+    )
+endif
+
 test_openai_sse = executable(
     'test-openai-sse',
     'test_openai_sse.c',
@@ -284,6 +325,50 @@ foreach entry : store_plugin_tests
 endforeach
 
 if get_option('shared_plugins')
+    official_plugin_modules = [
+        telos_memory_store_module,
+        telos_ring_store_module,
+        telos_markdown_store_module,
+        telos_openai_responses_module,
+        telos_agent_skills_module,
+        telos_project_guidance_module,
+    ]
+    official_plugin_module_paths = [
+        telos_memory_store_module.full_path(),
+        telos_ring_store_module.full_path(),
+        telos_markdown_store_module.full_path(),
+        telos_openai_responses_module.full_path(),
+        telos_agent_skills_module.full_path(),
+        telos_project_guidance_module.full_path(),
+    ]
+    official_plugin_source_paths = [
+        meson.project_source_root() / 'plugins/stores/memory',
+        meson.project_source_root() / 'plugins/stores/ring',
+        meson.project_source_root() / 'plugins/stores/markdown',
+        meson.project_source_root() / 'plugins/providers/openai-responses',
+        meson.project_source_root() / 'plugins/resources/agent-skills',
+        meson.project_source_root()
+            / 'plugins/context-sources/project-guidance',
+    ]
+    if terminal_frontend_available
+        official_plugin_modules += [telos_terminal_frontend_module]
+        official_plugin_module_paths += [
+            telos_terminal_frontend_module.full_path(),
+        ]
+        official_plugin_source_paths += [
+            meson.project_source_root() / 'plugins/frontends/terminal',
+        ]
+    endif
+    if curl_transport_available
+        official_plugin_modules += [telos_curl_transport_module]
+        official_plugin_module_paths += [
+            telos_curl_transport_module.full_path(),
+        ]
+        official_plugin_source_paths += [
+            meson.project_source_root() / 'plugins/transports/curl',
+        ]
+    endif
+
     test_official_plugins = executable(
         'test-official-plugins',
         'test_official_plugins.c',
@@ -296,31 +381,8 @@ if get_option('shared_plugins')
     test(
         'official-plugins',
         test_official_plugins,
-        args: [
-            telos_memory_store_module.full_path(),
-            telos_ring_store_module.full_path(),
-            telos_markdown_store_module.full_path(),
-            telos_openai_responses_module.full_path(),
-            telos_agent_skills_module.full_path(),
-            telos_project_guidance_module.full_path(),
-            meson.project_source_root() / 'plugins/stores/memory',
-            meson.project_source_root() / 'plugins/stores/ring',
-            meson.project_source_root() / 'plugins/stores/markdown',
-            meson.project_source_root()
-                / 'plugins/providers/openai-responses',
-            meson.project_source_root()
-                / 'plugins/resources/agent-skills',
-            meson.project_source_root()
-                / 'plugins/context-sources/project-guidance',
-        ],
-        depends: [
-            telos_memory_store_module,
-            telos_ring_store_module,
-            telos_markdown_store_module,
-            telos_openai_responses_module,
-            telos_agent_skills_module,
-            telos_project_guidance_module,
-        ],
+        args: official_plugin_module_paths + official_plugin_source_paths,
+        depends: official_plugin_modules,
         suite: 'plugins',
     )
 endif

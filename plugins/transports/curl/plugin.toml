@@ -1,0 +1,26 @@
+[plugin]
+id = "dev.zevorn.curl-transport"
+name = "curl Transport"
+version = "0.1.0"
+abi = 1
+entry = "telos_plugin_init_v1"
+
+[runtime]
+modes = ["builtin", "inprocess"]
+default = "builtin"
+
+[platform]
+targets = [
+    "linux-x86_64",
+    "linux-aarch64",
+    "linux-riscv64",
+]
+
+[build]
+system = "meson"
+
+[permissions]
+required = [
+    "network.https",
+    "network.http:loopback",
+]
