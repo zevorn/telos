@@ -11,6 +11,7 @@ Telos v0.1 provides:
 - transactional Plugin registration, rolling Generations, and a process host
 - OpenAI-compatible Agent Skills and deterministic prompt composition
 - Provider-neutral Items and an OpenAI Responses Provider Plugin
+- a Pi-style Linux terminal Frontend and cancellable curl Transport Plugins
 - Policy-controlled Tools, Capability and Secret Brokers, and an Agent loop
 - source-first Plugin inspection, build, test, cache, activation, and rollback
 - a public Meson Plugin SDK and Linux CLI
@@ -19,7 +20,8 @@ Telos v0.1 provides:
 
 ## Build and test
 
-Telos requires a C17 compiler, Meson 1.4 or newer, Ninja, and pkg-config.
+Telos requires a C17 compiler, Meson 1.4 or newer, Ninja, and pkg-config. The
+default Linux host profile also requires libcurl development headers.
 
 ```sh
 meson setup build
@@ -36,12 +38,36 @@ Zephyr commands.
 Telos uses C17, Meson, and Ninja. Zephyr's upstream CMake build system is used
 only through a thin platform adapter for final firmware integration.
 
+## Start the Linux terminal Agent
+
+Install the libcurl development package, then require the Linux Transport at
+configuration time:
+
+```sh
+meson setup build -Dcurl_transport=enabled
+meson compile -C build
+
+export TELOS_AGENT_MODEL='your-responses-model'
+export OPENAI_API_KEY='your-api-key'
+build/tools/telos
+```
+
+Running `telos` without a command opens the interactive terminal UI. Use
+`telos chat`, or run a single pipeline-friendly turn with
+`telos run 'your prompt'`. Responses-compatible local servers can be selected
+with `TELOS_AGENT_ENDPOINT=http://127.0.0.1:PORT/v1`; loopback HTTP does not
+require a real API key.
+
+See [the Linux terminal Agent guide](docs/linux-agent.md) for configuration,
+key bindings, local endpoints, and troubleshooting.
+
 ## Documentation
 
 - [Telos documentation](docs/README.md)
 - [memory and resource model](docs/memory.md)
 - [official Plugins and contribution guide](plugins/README.md)
 - [verification guide](docs/testing.md)
+- [Linux terminal Agent](docs/linux-agent.md)
 
 Replaceable behavior belongs in `plugins/`; Core is limited to shared runtime
 invariants and extension interfaces. Contributions of focused, well-tested

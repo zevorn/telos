@@ -14,6 +14,8 @@ released under the same rules as the Plugins maintained by the core team.
 | [Markdown Store](stores/markdown/README.md) | Store | Linux and Zephyr with a filesystem |
 | [Agent Skills](resources/agent-skills/README.md) | Context Source | Linux |
 | [Project Guidance](context-sources/project-guidance/README.md) | Context Source | Linux |
+| [Terminal Frontend](frontends/terminal/README.md) | Frontend | Linux |
+| [curl Transport](transports/curl/README.md) | Transport | Linux |
 
 ## Plugin-first rule
 

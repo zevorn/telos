@@ -89,6 +89,11 @@ least 90% line coverage and 80% branch coverage. The
 `allocation-failure-matrix` test injects failures into every observed
 `malloc`, `calloc`, and `realloc` call for the public subsystems it exercises.
 
+When libcurl is available, `terminal-frontend`, `terminal-tui`,
+`curl-transport`, and `agent-chat` cover plain pipes, a real pseudoterminal,
+cancellation validation, and an end-to-end local streaming Responses request.
+No model credential is used by these tests.
+
 ## Zephyr
 
 The repository contains a west manifest pinned to Zephyr 4.4.0. Zephyr 4.4
