@@ -103,3 +103,26 @@ test(
     args: '--help',
     suite: 'functional',
 )
+
+if terminal_frontend_available and curl_transport_available
+    test_agent_server = executable(
+        'test-agent-server',
+        'test_agent_server.c',
+    )
+
+    test(
+        'agent-chat',
+        test_shell,
+        args: [
+            meson.current_source_dir() / 'test_chat.sh',
+            telos_cli.full_path(),
+            test_agent_server.full_path(),
+        ],
+        depends: [
+            telos_cli,
+            test_agent_server,
+        ],
+        suite: 'functional',
+        timeout: 30,
+    )
+endif

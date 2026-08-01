@@ -129,9 +129,12 @@ int main(void)
              override_rejected(config, NULL, "model") &&
              override_rejected(config, "agent.model", NULL) &&
              override_rejected(config, "agent.model", "") &&
+             override_rejected(config, "agent.endpoint", "") &&
              override_rejected(config, "builder.backend", "other") &&
              override_rejected(config, "providers.openai.secret", "secret:x") &&
              override_rejected(config, "state.directory", "relative") &&
+             telos_config_override(config, "agent.endpoint",
+                                   "https://localhost/v1", NULL) &&
              telos_config_override(config, "builder.backend", "native", NULL) &&
              telos_config_override(config, "state.directory", "/tmp/new", NULL);
     telos_config_destroy(config);

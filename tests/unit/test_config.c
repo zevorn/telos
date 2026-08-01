@@ -50,6 +50,8 @@ int main(void)
     write_file(project_config, "[agent]\nprovider = \"project-provider\"\n"
                                "[builder]\nbackend = \"native\"\n");
     assert(setenv("TELOS_AGENT_PROVIDER", "environment-provider", 1) == 0);
+    assert(setenv("TELOS_AGENT_ENDPOINT", "https://environment.invalid/v1",
+                  1) == 0);
 
     config = telos_config_load(home, project, &error);
     assert(config != NULL);
@@ -60,6 +62,10 @@ int main(void)
            TELOS_CONFIG_ENVIRONMENT);
     assert(strcmp(telos_config_get(config, "agent.model"), "user-model") == 0);
     assert(telos_config_get_origin(config, "agent.model") == TELOS_CONFIG_USER);
+    assert(strcmp(telos_config_get(config, "agent.endpoint"),
+                  "https://environment.invalid/v1") == 0);
+    assert(telos_config_get_origin(config, "agent.endpoint") ==
+           TELOS_CONFIG_ENVIRONMENT);
     assert(strcmp(telos_config_get(config, "builder.backend"), "native") == 0);
     assert(telos_config_override(config, "agent.provider", "cli-provider",
                                  &error));
@@ -73,6 +79,7 @@ int main(void)
     telos_config_destroy(config);
 
     unsetenv("TELOS_AGENT_PROVIDER");
+    unsetenv("TELOS_AGENT_ENDPOINT");
     unlink(project_config);
     unlink(user_config);
     rmdir(project);

@@ -17,6 +17,10 @@
 #include <telos/trace.h>
 #include <telos/value.h>
 
+#ifdef TELOS_HAVE_CHAT
+#include "chat.h"
+#endif
+
 #define TELOS_VERSION "0.1.0"
 
 struct cli_options {
@@ -34,11 +38,11 @@ struct cli_options {
 static void usage(FILE *stream)
 {
     fputs("Telos Agentic Framework 0.1.0\n"
-          "usage: telos [OPTIONS] COMMAND [ARGS]\n"
+          "usage: telos [OPTIONS] [COMMAND [ARGS]]\n"
           "\n"
           "Commands:\n"
-          "  run\n"
-          "  chat\n"
+          "  chat [PROMPT]       Start the interactive terminal Agent\n"
+          "  run PROMPT          Run one non-interactive Agent turn\n"
           "  doctor\n"
           "  plugin list|info|install|build|test|activate|rollback|remove\n"
           "  resource list|validate|reload\n"
@@ -48,6 +52,9 @@ static void usage(FILE *stream)
           "  --json                 Emit machine-readable JSON\n"
           "  --yes                  Approve an inspected installation plan\n"
           "  --state-dir PATH       Override state.directory\n"
+          "  --provider ID          Override agent.provider\n"
+          "  --model ID             Override agent.model\n"
+          "  --endpoint URL         Override agent.endpoint\n"
           "  --builder BACKEND      native or container\n"
           "  --sdk-pkgconfig PATH   SDK pkg-config directory\n"
           "  --sdk-sysroot PATH     SDK installation sysroot\n"
@@ -537,18 +544,59 @@ static int unsupported(const struct cli_options *options, const char *message)
     return print_error(options->json, 4, NULL, message);
 }
 
+#ifdef TELOS_HAVE_CHAT
+static int agent_command(const struct cli_options *options,
+                         const struct telos_config *config,
+                         const char *home_directory,
+                         const char *current_directory,
+                         const char *initial_prompt,
+                         bool single_turn)
+{
+    struct telos_error *error = NULL;
+    int result;
+
+    if (options->json) {
+        return unsupported(options,
+                           "Agent terminal output does not support --json");
+    }
+    if (telos_chat_run(config, home_directory, current_directory,
+                       initial_prompt, single_turn, &error)) {
+        return 0;
+    }
+    result = print_error(false, 3, error, "Agent terminal failed");
+    telos_error_release(error);
+    return result;
+}
+#endif
+
 static int dispatch(int argc, char **argv, int index,
                     const struct cli_options *options,
-                    const struct telos_config *config)
+                    const struct telos_config *config,
+                    const char *home_directory,
+                    const char *current_directory)
 {
     const char *command = argv[index++];
 
+#ifdef TELOS_HAVE_CHAT
+    if (strcmp(command, "chat") == 0 && index + 1 >= argc) {
+        return agent_command(options, config, home_directory,
+                             current_directory,
+                             index == argc ? NULL : argv[index], false);
+    }
+    if (strcmp(command, "run") == 0 && index + 1 == argc) {
+        return agent_command(options, config, home_directory,
+                             current_directory, argv[index], true);
+    }
+#else
+    (void)home_directory;
+    (void)current_directory;
+#endif
     if (strcmp(command, "doctor") == 0 && index == argc) {
         return doctor(options, config);
     }
-    if ((strcmp(command, "run") == 0 || strcmp(command, "chat") == 0) &&
-        index == argc) {
-        return unsupported(options, "A configured Provider Plugin is required");
+    if (strcmp(command, "run") == 0 || strcmp(command, "chat") == 0) {
+        return unsupported(options,
+                           "The Linux Agent frontend is not available");
     }
     if (strcmp(command, "plugin") == 0 && index < argc) {
         const char *subcommand = argv[index++];
@@ -620,10 +668,6 @@ int main(int argc, char **argv)
     int index = 1;
     int result;
 
-    if (argc == 1) {
-        usage(stdout);
-        return 0;
-    }
     if (home == NULL || getcwd(current, sizeof(current)) == NULL) {
         return print_error(false, 3, NULL, "HOME or current directory missing");
     }
@@ -659,6 +703,27 @@ int main(int argc, char **argv)
             }
             index += 2;
         } else if (index + 1 < argc &&
+                   strcmp(argv[index], "--provider") == 0) {
+            if (!telos_config_override(config, "agent.provider",
+                                       argv[index + 1], &error)) {
+                break;
+            }
+            index += 2;
+        } else if (index + 1 < argc &&
+                   strcmp(argv[index], "--model") == 0) {
+            if (!telos_config_override(config, "agent.model",
+                                       argv[index + 1], &error)) {
+                break;
+            }
+            index += 2;
+        } else if (index + 1 < argc &&
+                   strcmp(argv[index], "--endpoint") == 0) {
+            if (!telos_config_override(config, "agent.endpoint",
+                                       argv[index + 1], &error)) {
+                break;
+            }
+            index += 2;
+        } else if (index + 1 < argc &&
                    strcmp(argv[index], "--sdk-pkgconfig") == 0) {
             options.sdk_pkgconfig = argv[index + 1];
             index += 2;
@@ -688,9 +753,14 @@ int main(int argc, char **argv)
     options.state_directory = telos_config_get(config, "state.directory");
     options.builder = telos_config_get(config, "builder.backend");
     if (index >= argc) {
-        result = print_error(options.json, 2, NULL, "A command is required");
+#ifdef TELOS_HAVE_CHAT
+        result = agent_command(&options, config, home, current, NULL, false);
+#else
+        result = print_error(options.json, 4, NULL,
+                             "The Linux Agent frontend is not available");
+#endif
     } else {
-        result = dispatch(argc, argv, index, &options, config);
+        result = dispatch(argc, argv, index, &options, config, home, current);
     }
     telos_config_destroy(config);
     return result;

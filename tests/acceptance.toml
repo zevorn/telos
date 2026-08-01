@@ -35,7 +35,7 @@ tests = ["prompt", "prompt-trust", "prompt-invalid"]
 external = []
 
 [criteria.AC-9]
-tests = ["openai-request", "openai-sse", "openai-sse-invalid", "openai-local-transport", "provider-invalid"]
+tests = ["openai-request", "openai-sse", "openai-sse-invalid", "openai-local-transport", "provider-invalid", "curl-transport"]
 external = []
 
 [criteria.AC-10]
@@ -55,11 +55,11 @@ tests = ["sdk-contract", "manifest-lock", "manifest-invalid"]
 external = []
 
 [criteria.AC-14]
-tests = ["cli-functional", "config-precedence", "config-invalid", "telos-build-help"]
+tests = ["cli-functional", "config-precedence", "config-invalid", "telos-build-help", "terminal-frontend", "terminal-tui", "agent-chat"]
 external = ["zephyr-shell"]
 
 [criteria.AC-15]
-tests = ["linux-agent-process-scenario", "plugin-installer", "openai-local-transport", "agent-failures"]
+tests = ["linux-agent-process-scenario", "plugin-installer", "openai-local-transport", "agent-failures", "agent-chat"]
 external = ["zephyr-native", "zephyr-qemu-network"]
 
 [criteria.AC-16]

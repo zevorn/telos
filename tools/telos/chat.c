@@ -1,0 +1,563 @@
+#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <telos/agent.h>
+#include <telos/plugins/curl_transport.h>
+#include <telos/plugins/openai_responses.h>
+#include <telos/plugins/project_guidance.h>
+#include <telos/plugins/terminal_frontend.h>
+#include <telos/prompt.h>
+#include <telos/registry.h>
+#include <telos/secret.h>
+#include <telos/tool.h>
+#include <telos/value.h>
+
+#include "chat.h"
+
+#define CHAT_PATH_SIZE 4096U
+#define CHAT_MAXIMUM_MESSAGES 64U
+#define CHAT_MAXIMUM_CONVERSATION_BYTES (4U * 1024U * 1024U)
+#define CHAT_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
+
+struct chat_session {
+    struct telos_secret_broker *secret_broker;
+    struct telos_openai_responses_provider *provider;
+    struct telos_registry *registry;
+    struct telos_registry_generation *generation;
+    struct telos_capability_broker *capability_broker;
+    struct telos_prompt_snapshot *prompt;
+    struct telos_value *tools;
+    struct telos_value *provider_options;
+    struct telos_value *messages[CHAT_MAXIMUM_MESSAGES];
+    size_t message_sizes[CHAT_MAXIMUM_MESSAGES];
+    size_t message_count;
+    size_t conversation_bytes;
+    bool loopback_endpoint;
+    struct telos_curl_transport_config transport;
+};
+
+struct observer_context {
+    telos_frontend_emit_fn emit;
+    void *emit_context;
+};
+
+static void set_error(struct telos_error **error,
+                      enum telos_error_domain domain,
+                      int code,
+                      const char *message)
+{
+    if (error != NULL && *error == NULL) {
+        *error = telos_error_create(domain, code, message, NULL);
+    }
+}
+
+static char *copy_text(const char *text)
+{
+    size_t size = strlen(text) + 1;
+    char *copy = malloc(size);
+
+    if (copy != NULL) {
+        memcpy(copy, text, size);
+    }
+    return copy;
+}
+
+static bool host_matches(const char *host, const char *expected)
+{
+    size_t size = strlen(expected);
+
+    return strncmp(host, expected, size) == 0 &&
+           (host[size] == '\0' || host[size] == '/' || host[size] == ':');
+}
+
+static bool endpoint_is_loopback(const char *endpoint)
+{
+    const char *host;
+
+    if (strncmp(endpoint, "http://", 7) == 0) {
+        host = endpoint + 7;
+    } else if (strncmp(endpoint, "https://", 8) == 0) {
+        host = endpoint + 8;
+    } else {
+        return false;
+    }
+    return host_matches(host, "localhost") ||
+           host_matches(host, "127.0.0.1") || host_matches(host, "[::1]");
+}
+
+static bool endpoint_is_allowed(const char *endpoint)
+{
+    return endpoint != NULL &&
+           (strncmp(endpoint, "https://", 8) == 0 ||
+            (strncmp(endpoint, "http://", 7) == 0 &&
+             endpoint_is_loopback(endpoint)));
+}
+
+static char *resolve_secret(const char *reference, const char *target,
+                            void *context, struct telos_error **error)
+{
+    const struct chat_session *chat = context;
+    const char *value = getenv("TELOS_AGENT_API_KEY");
+
+    if (value == NULL || value[0] == '\0') {
+        value = getenv("OPENAI_API_KEY");
+    }
+    if (strcmp(reference, "secret:provider.openai") != 0 ||
+        strcmp(target, "provider.openai") != 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_PERMISSION, EACCES,
+                  "Agent secret Reference is not authorized");
+        return NULL;
+    }
+    if ((value == NULL || value[0] == '\0') && chat->loopback_endpoint) {
+        value = "local";
+    }
+    if (value == NULL || value[0] == '\0') {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, ENOENT,
+                  "TELOS_AGENT_API_KEY or OPENAI_API_KEY is required");
+        return NULL;
+    }
+    return copy_text(value);
+}
+
+static enum telos_policy_decision
+deny_tools(const struct telos_policy_request *request, void *context)
+{
+    (void)request;
+    (void)context;
+    return TELOS_POLICY_DENY;
+}
+
+static bool marker_exists(const char *directory, const char *name)
+{
+    char path[CHAT_PATH_SIZE];
+    struct stat status;
+
+    return snprintf(path, sizeof(path), "%s/%s", directory, name) <
+               (int)sizeof(path) &&
+           stat(path, &status) == 0;
+}
+
+static bool find_project_root(const char *current_directory,
+                              char root[CHAT_PATH_SIZE])
+{
+    if (realpath(current_directory, root) == NULL) {
+        return false;
+    }
+    while (!marker_exists(root, ".git") &&
+           !marker_exists(root, "telos.toml")) {
+        char *separator;
+
+        if (strcmp(root, "/") == 0) {
+            return realpath(current_directory, root) != NULL;
+        }
+        separator = strrchr(root, '/');
+        if (separator == root) {
+            root[1] = '\0';
+        } else {
+            *separator = '\0';
+        }
+    }
+    return true;
+}
+
+static bool create_prompt(struct chat_session *chat,
+                          const char *home_directory,
+                          const char *current_directory,
+                          struct telos_error **error)
+{
+    static const char agent_definition[] =
+        "You are Telos, an expert coding agent running in the user's terminal. "
+        "Help with software engineering tasks, follow the supplied project "
+        "guidance, inspect relevant context before acting, and continue until "
+        "the request is genuinely handled. Use only tools exposed by Telos, "
+        "preserve existing work, keep changes focused, explain important "
+        "tradeoffs plainly, and verify results before claiming success.";
+    struct telos_prompt_fragment fragments[3];
+    char telos_home[CHAT_PATH_SIZE];
+    char project_root[CHAT_PATH_SIZE];
+    char *user_guidance = NULL;
+    char *project_guidance = NULL;
+    size_t count = 0;
+    bool result = false;
+
+    if (snprintf(telos_home, sizeof(telos_home), "%s/.telos",
+                 home_directory) >= (int)sizeof(telos_home) ||
+        !find_project_root(current_directory, project_root)) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Agent project root could not be resolved");
+        return false;
+    }
+    if (!telos_guidance_discover(telos_home, project_root, current_directory,
+                                 &user_guidance, &project_guidance, error)) {
+        return false;
+    }
+    fragments[count++] = (struct telos_prompt_fragment){
+        .slot = TELOS_PROMPT_AGENT_DEFINITION,
+        .trust = TELOS_PROMPT_TRUST_CORE,
+        .priority = 0,
+        .byte_budget = sizeof(agent_definition) - 1,
+        .source = "Telos terminal agent",
+        .content = agent_definition,
+    };
+    if (user_guidance[0] != '\0') {
+        fragments[count++] = (struct telos_prompt_fragment){
+            .slot = TELOS_PROMPT_USER_GUIDANCE,
+            .trust = TELOS_PROMPT_TRUST_USER,
+            .priority = 0,
+            .byte_budget = strlen(user_guidance),
+            .source = "~/.telos/AGENTS.md",
+            .content = user_guidance,
+        };
+    }
+    if (project_guidance[0] != '\0') {
+        fragments[count++] = (struct telos_prompt_fragment){
+            .slot = TELOS_PROMPT_PROJECT_GUIDANCE,
+            .trust = TELOS_PROMPT_TRUST_PROJECT,
+            .priority = 0,
+            .byte_budget = strlen(project_guidance),
+            .source = "project AGENTS.md",
+            .content = project_guidance,
+        };
+    }
+    chat->prompt = telos_prompt_snapshot_create(fragments, count, error);
+    result = chat->prompt != NULL;
+    telos_prompt_string_free(project_guidance);
+    telos_prompt_string_free(user_guidance);
+    return result;
+}
+
+static struct telos_value *create_message(const char *role, const char *text,
+                                          struct telos_error **error)
+{
+    struct telos_value *role_value = telos_value_new_string(role);
+    struct telos_value *content_value = telos_value_new_string(text);
+    const char *keys[] = {"role", "content"};
+    const struct telos_value *values[] = {role_value, content_value};
+    struct telos_value *message = NULL;
+
+    if (role_value != NULL && content_value != NULL) {
+        message = telos_value_new_object(keys, values, 2);
+    }
+    telos_value_release(content_value);
+    telos_value_release(role_value);
+    if (message == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Agent conversation message allocation failed");
+    }
+    return message;
+}
+
+static void drop_messages(struct chat_session *chat, size_t count)
+{
+    if (count > chat->message_count) {
+        count = chat->message_count;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        chat->conversation_bytes -= chat->message_sizes[index];
+        telos_value_release(chat->messages[index]);
+    }
+    memmove(chat->messages, chat->messages + count,
+            (chat->message_count - count) * sizeof(chat->messages[0]));
+    memmove(chat->message_sizes, chat->message_sizes + count,
+            (chat->message_count - count) * sizeof(chat->message_sizes[0]));
+    chat->message_count -= count;
+}
+
+static void clear_messages(struct chat_session *chat)
+{
+    drop_messages(chat, chat->message_count);
+}
+
+static bool append_message(struct chat_session *chat, const char *role,
+                           const char *text, struct telos_error **error)
+{
+    size_t size = strlen(text);
+    struct telos_value *message;
+
+    if (size > CHAT_MAXIMUM_CONVERSATION_BYTES) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EFBIG,
+                  "Agent conversation message is too large");
+        return false;
+    }
+    message = create_message(role, text, error);
+    if (message == NULL) {
+        return false;
+    }
+    while (chat->message_count >= CHAT_MAXIMUM_MESSAGES ||
+           size > CHAT_MAXIMUM_CONVERSATION_BYTES -
+                      chat->conversation_bytes) {
+        drop_messages(chat, chat->message_count >= 2 ? 2 : 1);
+    }
+    chat->messages[chat->message_count] = message;
+    chat->message_sizes[chat->message_count] = size;
+    chat->message_count += 1;
+    chat->conversation_bytes += size;
+    return true;
+}
+
+static bool emit_frontend(struct observer_context *observer,
+                          enum telos_frontend_event_kind kind,
+                          const char *text,
+                          const char *name,
+                          struct telos_error **error)
+{
+    const struct telos_frontend_event event = {
+        .kind = kind,
+        .text = text,
+        .name = name,
+    };
+
+    return observer->emit(&event, observer->emit_context, error);
+}
+
+static bool observe_agent(const struct telos_agent_event *event,
+                          void *context, struct telos_error **error)
+{
+    struct observer_context *observer = context;
+
+    if (event->kind == TELOS_AGENT_PROVIDER_EVENT) {
+        const struct telos_provider_event *provider = event->provider_event;
+
+        if (provider->kind == TELOS_PROVIDER_RESPONSE_STARTED) {
+            return emit_frontend(observer, TELOS_FRONTEND_RESPONSE_STARTED,
+                                 NULL, NULL, error);
+        }
+        if (provider->kind == TELOS_PROVIDER_TEXT_DELTA) {
+            return emit_frontend(observer, TELOS_FRONTEND_TEXT_DELTA,
+                                 provider->delta, NULL, error);
+        }
+        return true;
+    }
+    if (event->kind == TELOS_AGENT_TOOL_STARTED) {
+        return emit_frontend(observer, TELOS_FRONTEND_TOOL_STARTED, NULL,
+                             event->tool_name, error);
+    }
+    if (event->kind == TELOS_AGENT_TOOL_COMPLETED) {
+        return emit_frontend(observer, TELOS_FRONTEND_TOOL_COMPLETED, NULL,
+                             event->tool_name, error);
+    }
+    if (event->kind == TELOS_AGENT_TOOL_FAILED) {
+        return emit_frontend(observer, TELOS_FRONTEND_TOOL_FAILED, NULL,
+                             event->tool_name, error);
+    }
+    return true;
+}
+
+static bool chat_turn(const char *input, const struct telos_cancel *cancel,
+                      telos_frontend_emit_fn emit, void *emit_context,
+                      void *turn_context, struct telos_error **error)
+{
+    struct chat_session *chat = turn_context;
+    struct observer_context observer = {
+        .emit = emit,
+        .emit_context = emit_context,
+    };
+    struct telos_agent_result result = {0};
+    struct telos_value *items = NULL;
+    bool success = false;
+
+    if (strcmp(input, "/clear") == 0) {
+        clear_messages(chat);
+        return emit_frontend(&observer, TELOS_FRONTEND_NOTICE,
+                             "conversation cleared", NULL, error);
+    }
+    if (!append_message(chat, "user", input, error)) {
+        return false;
+    }
+    items = telos_value_new_array(
+        (const struct telos_value *const *)chat->messages,
+        chat->message_count);
+    if (items == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Agent conversation Snapshot allocation failed");
+        goto cleanup;
+    }
+    {
+        const struct telos_provider_request request = {
+            .instructions = telos_prompt_snapshot_content(chat->prompt),
+            .items = items,
+            .tools = chat->tools,
+            .options = chat->provider_options,
+            .state_mode = TELOS_PROVIDER_STATE_LOCAL,
+        };
+        const struct telos_agent_options options = {
+            .registry_generation = chat->generation,
+            .capability_broker = chat->capability_broker,
+            .dispatch = telos_openai_provider_dispatch,
+            .provider_context = chat->provider,
+            .observe = observe_agent,
+            .observe_context = &observer,
+            .maximum_provider_rounds = 8,
+            .maximum_response_bytes = CHAT_MAXIMUM_RESPONSE_BYTES,
+        };
+
+        if (!telos_agent_run(&options, &request, cancel, &result, error)) {
+            goto cleanup;
+        }
+    }
+    success = append_message(chat, "assistant", result.text, error);
+
+cleanup:
+    telos_agent_result_clear(&result);
+    telos_value_release(items);
+    return success;
+}
+
+static bool initialize_chat(struct chat_session *chat,
+                            const struct telos_config *config,
+                            const char *home_directory,
+                            const char *current_directory,
+                            struct telos_error **error)
+{
+    const char *provider_name = telos_config_get(config, "agent.provider");
+    const char *model = telos_config_get(config, "agent.model");
+    const char *endpoint = telos_config_get(config, "agent.endpoint");
+    const char *capabilities[] = {
+        "network.https",
+        "secret.use:provider.openai",
+    };
+
+    if (provider_name == NULL ||
+        (strcmp(provider_name, "openai") != 0 &&
+         strcmp(provider_name, "openai-responses") != 0 &&
+         strcmp(provider_name, "dev.zevorn.openai-responses") != 0)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "The configured Agent Provider is not available");
+        return false;
+    }
+    if (model == NULL || model[0] == '\0' ||
+        strcmp(model, "unconfigured") == 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Set agent.model or TELOS_AGENT_MODEL before starting");
+        return false;
+    }
+    if (!endpoint_is_allowed(endpoint)) {
+        set_error(error, TELOS_ERROR_DOMAIN_PERMISSION, EACCES,
+                  "Agent endpoint must use HTTPS or loopback HTTP");
+        return false;
+    }
+    chat->loopback_endpoint = endpoint_is_loopback(endpoint);
+    chat->transport.timeout_milliseconds =
+        TELOS_CURL_DEFAULT_TIMEOUT_MILLISECONDS;
+    chat->secret_broker = telos_secret_broker_create(resolve_secret, chat,
+                                                      error);
+    if (chat->secret_broker == NULL) {
+        return false;
+    }
+    {
+        const struct telos_openai_responses_config provider_config = {
+            .model = model,
+            .endpoint = endpoint,
+            .secret_reference = "secret:provider.openai",
+            .secret_broker = chat->secret_broker,
+            .capabilities = capabilities,
+            .capability_count = 2,
+            .send = telos_curl_transport_send,
+            .transport_context = &chat->transport,
+            .unknown_event_policy = TELOS_OPENAI_UNKNOWN_EVENT_IGNORE,
+        };
+
+        chat->provider = telos_openai_provider_create(&provider_config, error);
+    }
+    if (chat->provider == NULL) {
+        return false;
+    }
+    chat->registry = telos_registry_create(NULL, 0, error);
+    if (chat->registry == NULL) {
+        return false;
+    }
+    chat->generation = telos_registry_acquire(chat->registry);
+    if (chat->generation == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Agent Registry Snapshot allocation failed");
+        return false;
+    }
+    chat->capability_broker =
+        telos_capability_broker_create(NULL, 0, deny_tools, NULL, error);
+    if (chat->capability_broker == NULL) {
+        return false;
+    }
+    chat->tools = telos_value_new_array(NULL, 0);
+    chat->provider_options = telos_value_new_object(NULL, NULL, 0);
+    if (chat->tools == NULL || chat->provider_options == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Agent Provider options allocation failed");
+        return false;
+    }
+    return create_prompt(chat, home_directory, current_directory, error);
+}
+
+static void clear_chat(struct chat_session *chat)
+{
+    clear_messages(chat);
+    telos_value_release(chat->provider_options);
+    telos_value_release(chat->tools);
+    telos_prompt_snapshot_release(chat->prompt);
+    telos_capability_broker_destroy(chat->capability_broker);
+    telos_registry_generation_release(chat->generation);
+    telos_registry_destroy(chat->registry);
+    telos_openai_provider_destroy(chat->provider);
+    telos_secret_broker_destroy(chat->secret_broker);
+}
+
+bool telos_chat_run(const struct telos_config *config,
+                    const char *home_directory,
+                    const char *current_directory,
+                    const char *initial_prompt,
+                    bool single_turn,
+                    struct telos_error **error)
+{
+    struct chat_session chat = {0};
+    const char *provider;
+    const char *model;
+    bool result;
+
+    if (error != NULL) {
+        *error = NULL;
+    }
+    if (config == NULL || home_directory == NULL ||
+        current_directory == NULL ||
+        (single_turn && (initial_prompt == NULL ||
+                         initial_prompt[0] == '\0'))) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Agent chat arguments are invalid");
+        return false;
+    }
+    if (!initialize_chat(&chat, config, home_directory, current_directory,
+                         error)) {
+        clear_chat(&chat);
+        return false;
+    }
+    provider = telos_config_get(config, "agent.provider");
+    model = telos_config_get(config, "agent.model");
+    {
+        const struct telos_frontend_session session = {
+            .application = "Telos",
+            .version = "0.1.0",
+            .provider = provider,
+            .model = model,
+            .working_directory = current_directory,
+            .initial_prompt = initial_prompt,
+            .single_turn = single_turn,
+            .turn = chat_turn,
+            .turn_context = &chat,
+        };
+        const struct telos_terminal_frontend_config frontend = {
+            .session = &session,
+            .input_descriptor = STDIN_FILENO,
+            .output_descriptor = STDOUT_FILENO,
+            .force_plain = single_turn,
+        };
+
+        result = telos_terminal_frontend_run(&frontend, error);
+    }
+    clear_chat(&chat);
+    return result;
+}
