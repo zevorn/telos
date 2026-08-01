@@ -28,7 +28,8 @@ gcovr \
     --root "$source_root" \
     "$build_directory/src" \
     "$build_directory/plugins" \
-    --filter '^(src|plugins)/' \
+    "$build_directory/platforms/linux" \
+    --filter '^(src|plugins|platforms/linux)/' \
     --html-details "$coverage_directory/index.html" \
     --xml "$coverage_directory/coverage.xml" \
     --json-summary "$coverage_directory/summary.json" \

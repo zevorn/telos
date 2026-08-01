@@ -26,11 +26,17 @@ dl_dep = cc.find_library('dl', required: false)
 subdir('src')
 subdir('plugins')
 
+host_platform_deps = []
+if host_machine.system() == 'linux'
+    subdir('platforms/linux')
+    host_platform_deps += telos_linux_platform_dep
+endif
+
 telos_dep = declare_dependency(
     dependencies: [
         telos_core_dep,
         telos_official_plugins_dep,
-    ],
+    ] + host_platform_deps,
 )
 
 subdir('tools')

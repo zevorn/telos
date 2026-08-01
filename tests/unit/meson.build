@@ -104,3 +104,21 @@ test(
     ],
     suite: 'unit',
 )
+
+if host_machine.system() == 'linux'
+    test_linux_platform = executable(
+        'test-linux-platform',
+        'test_linux_platform.c',
+        c_args: '-DTELOS_TEST_EXPECTED_ARCHITECTURE='
+            + linux_platform_architecture,
+        dependencies: telos_linux_platform_dep,
+        link_args: '-Wl,--wrap=sysconf',
+    )
+
+    test(
+        'linux-platform',
+        test_linux_platform,
+        args: linux_platform_target,
+        suite: 'unit',
+    )
+endif

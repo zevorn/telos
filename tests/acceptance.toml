@@ -3,7 +3,7 @@ approved_skips = []
 manual = ["credentialed-openai-responses-smoke"]
 
 [criteria.AC-1]
-tests = ["build-contract", "sdk-contract"]
+tests = ["build-contract", "sdk-contract", "linux-platform"]
 external = ["linux-gcc", "linux-clang", "zephyr-native", "zephyr-qemu"]
 
 [criteria.AC-2]
