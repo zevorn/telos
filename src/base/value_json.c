@@ -29,23 +29,18 @@ struct byte_buffer {
     size_t capacity;
 };
 
-static void set_error(
-    struct telos_error **error,
-    enum telos_error_domain domain,
-    int code,
-    const char *message
-)
+static void set_error(struct telos_error **error,
+                      enum telos_error_domain domain,
+                      int code,
+                      const char *message)
 {
     if (error != NULL && *error == NULL) {
         *error = telos_error_create(domain, code, message, NULL);
     }
 }
 
-static void writer_append(
-    struct json_writer *writer,
-    const char *data,
-    size_t size
-)
+static void
+writer_append(struct json_writer *writer, const char *data, size_t size)
 {
     if (!writer->valid || size > SIZE_MAX - writer->position) {
         writer->valid = false;
@@ -53,10 +48,8 @@ static void writer_append(
     }
 
     if (writer->buffer != NULL) {
-        if (
-            writer->position > writer->capacity
-            || size > writer->capacity - writer->position
-        ) {
+        if (writer->position > writer->capacity ||
+            size > writer->capacity - writer->position) {
             writer->valid = false;
             return;
         }
@@ -76,8 +69,7 @@ static void write_string(struct json_writer *writer, const char *value)
 
     writer_character(writer, '"');
     for (const unsigned char *cursor = (const unsigned char *)value;
-         *cursor != '\0';
-         ++cursor) {
+         *cursor != '\0'; ++cursor) {
         switch (*cursor) {
         case '"':
             writer_append(writer, "\\\"", 2);
@@ -120,11 +112,9 @@ static void write_string(struct json_writer *writer, const char *value)
     writer_character(writer, '"');
 }
 
-static void write_value(
-    struct json_writer *writer,
-    const struct telos_value *value,
-    unsigned int depth
-)
+static void write_value(struct json_writer *writer,
+                        const struct telos_value *value,
+                        unsigned int depth)
 {
     char number[64];
     int length;
@@ -146,11 +136,7 @@ static void write_value(
             writer->valid = false;
             return;
         }
-        writer_append(
-            writer,
-            boolean ? "true" : "false",
-            boolean ? 4 : 5
-        );
+        writer_append(writer, boolean ? "true" : "false", boolean ? 4 : 5);
         break;
     }
     case TELOS_VALUE_INTEGER: {
@@ -181,11 +167,8 @@ static void write_value(
             return;
         }
         writer_append(writer, number, (size_t)length);
-        if (
-            strchr(number, '.') == NULL
-            && strchr(number, 'e') == NULL
-            && strchr(number, 'E') == NULL
-        ) {
+        if (strchr(number, '.') == NULL && strchr(number, 'e') == NULL &&
+            strchr(number, 'E') == NULL) {
             writer_append(writer, ".0", 2);
         }
         break;
@@ -216,8 +199,7 @@ static void write_value(
             write_value(
                 writer,
                 telos_value_get(value, telos_value_key_at(value, index)),
-                depth + 1
-            );
+                depth + 1);
         }
         writer_character(writer, '}');
         break;
@@ -246,13 +228,11 @@ size_t telos_value_json_size(const struct telos_value *value)
     return writer.position + 1;
 }
 
-bool telos_value_write_json(
-    const struct telos_value *value,
-    char *buffer,
-    size_t buffer_size,
-    size_t *written,
-    struct telos_error **error
-)
+bool telos_value_write_json(const struct telos_value *value,
+                            char *buffer,
+                            size_t buffer_size,
+                            size_t *written,
+                            struct telos_error **error)
 {
     struct json_writer writer = {
         .buffer = buffer,
@@ -265,26 +245,15 @@ bool telos_value_write_json(
         *error = NULL;
     }
     if (value == NULL || buffer == NULL || buffer_size == 0) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            1,
-            "value, buffer, and non-zero buffer size are required"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, 1,
+                  "value, buffer, and non-zero buffer size are required");
         return false;
     }
 
     write_value(&writer, value, 0);
-    if (
-        !writer.valid
-        || writer.position >= buffer_size
-    ) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            2,
-            "JSON buffer is too small or Value is not serializable"
-        );
+    if (!writer.valid || writer.position >= buffer_size) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, 2,
+                  "JSON buffer is too small or Value is not serializable");
         return false;
     }
 
@@ -297,18 +266,13 @@ bool telos_value_write_json(
 
 static void parser_skip_whitespace(struct json_parser *parser)
 {
-    while (
-        parser->current < parser->end
-        && isspace((unsigned char)*parser->current)
-    ) {
+    while (parser->current < parser->end &&
+           isspace((unsigned char)*parser->current)) {
         ++parser->current;
     }
 }
 
-static bool byte_buffer_reserve(
-    struct byte_buffer *buffer,
-    size_t additional
-)
+static bool byte_buffer_reserve(struct byte_buffer *buffer, size_t additional)
 {
     size_t required;
     size_t capacity;
@@ -340,11 +304,8 @@ static bool byte_buffer_reserve(
     return true;
 }
 
-static bool byte_buffer_append(
-    struct byte_buffer *buffer,
-    const char *data,
-    size_t size
-)
+static bool
+byte_buffer_append(struct byte_buffer *buffer, const char *data, size_t size)
 {
     if (!byte_buffer_reserve(buffer, size)) {
         return false;
@@ -368,10 +329,7 @@ static int hexadecimal_value(char character)
     return -1;
 }
 
-static bool parser_code_unit(
-    struct json_parser *parser,
-    uint32_t *code_unit
-)
+static bool parser_code_unit(struct json_parser *parser, uint32_t *code_unit)
 {
     uint32_t result = 0;
 
@@ -391,10 +349,7 @@ static bool parser_code_unit(
     return true;
 }
 
-static bool append_code_point(
-    struct byte_buffer *buffer,
-    uint32_t code_point
-)
+static bool append_code_point(struct byte_buffer *buffer, uint32_t code_point)
 {
     char encoded[4];
     size_t size;
@@ -429,12 +384,8 @@ static char *parse_string(struct json_parser *parser)
     struct byte_buffer buffer = {0};
 
     if (parser->current >= parser->end || *parser->current != '"') {
-        set_error(
-            parser->error,
-            TELOS_ERROR_DOMAIN_PROTOCOL,
-            1,
-            "expected a JSON string"
-        );
+        set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 1,
+                  "expected a JSON string");
         return NULL;
     }
     ++parser->current;
@@ -446,24 +397,16 @@ static char *parse_string(struct json_parser *parser)
             char terminator = '\0';
 
             if (!byte_buffer_append(&buffer, &terminator, 1)) {
-                set_error(
-                    parser->error,
-                    TELOS_ERROR_DOMAIN_MEMORY,
-                    1,
-                    "could not allocate JSON string"
-                );
+                set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                          "could not allocate JSON string");
                 free(buffer.data);
                 return NULL;
             }
             return buffer.data;
         }
         if (character < 0x20) {
-            set_error(
-                parser->error,
-                TELOS_ERROR_DOMAIN_PROTOCOL,
-                2,
-                "unescaped control character in JSON string"
-            );
+            set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 2,
+                      "unescaped control character in JSON string");
             free(buffer.data);
             return NULL;
         }
@@ -471,12 +414,8 @@ static char *parse_string(struct json_parser *parser)
             char byte = (char)character;
 
             if (!byte_buffer_append(&buffer, &byte, 1)) {
-                set_error(
-                    parser->error,
-                    TELOS_ERROR_DOMAIN_MEMORY,
-                    1,
-                    "could not allocate JSON string"
-                );
+                set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                          "could not allocate JSON string");
                 free(buffer.data);
                 return NULL;
             }
@@ -522,24 +461,17 @@ static char *parse_string(struct json_parser *parser)
             if (code_point >= 0xd800 && code_point <= 0xdbff) {
                 uint32_t low;
 
-                if (
-                    (size_t)(parser->end - parser->current) < 6
-                    || parser->current[0] != '\\'
-                    || parser->current[1] != 'u'
-                ) {
+                if ((size_t)(parser->end - parser->current) < 6 ||
+                    parser->current[0] != '\\' || parser->current[1] != 'u') {
                     goto syntax_failure;
                 }
                 parser->current += 2;
-                if (
-                    !parser_code_unit(parser, &low)
-                    || low < 0xdc00
-                    || low > 0xdfff
-                ) {
+                if (!parser_code_unit(parser, &low) || low < 0xdc00 ||
+                    low > 0xdfff) {
                     goto syntax_failure;
                 }
-                code_point = 0x10000
-                    + ((code_point - 0xd800) << 10)
-                    + (low - 0xdc00);
+                code_point =
+                    0x10000 + ((code_point - 0xd800) << 10) + (low - 0xdc00);
             } else if (code_point >= 0xdc00 && code_point <= 0xdfff) {
                 goto syntax_failure;
             }
@@ -552,30 +484,20 @@ static char *parse_string(struct json_parser *parser)
     }
 
 syntax_failure:
-    set_error(
-        parser->error,
-        TELOS_ERROR_DOMAIN_PROTOCOL,
-        3,
-        "invalid escape or unterminated JSON string"
-    );
+    set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 3,
+              "invalid escape or unterminated JSON string");
     free(buffer.data);
     return NULL;
 
 memory_failure:
-    set_error(
-        parser->error,
-        TELOS_ERROR_DOMAIN_MEMORY,
-        1,
-        "could not allocate JSON string"
-    );
+    set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+              "could not allocate JSON string");
     free(buffer.data);
     return NULL;
 }
 
-static struct telos_value *parse_value(
-    struct json_parser *parser,
-    unsigned int depth
-);
+static struct telos_value *parse_value(struct json_parser *parser,
+                                       unsigned int depth);
 
 static void release_values(struct telos_value **values, size_t count)
 {
@@ -585,10 +507,8 @@ static void release_values(struct telos_value **values, size_t count)
     free(values);
 }
 
-static struct telos_value *parse_array(
-    struct json_parser *parser,
-    unsigned int depth
-)
+static struct telos_value *parse_array(struct json_parser *parser,
+                                       unsigned int depth)
 {
     struct telos_value **items = NULL;
     size_t count = 0;
@@ -613,30 +533,20 @@ static struct telos_value *parse_array(
             size_t new_capacity = capacity == 0 ? 4 : capacity * 2;
             struct telos_value **new_items;
 
-            if (
-                new_capacity < capacity
-                || new_capacity > SIZE_MAX / sizeof(*new_items)
-            ) {
+            if (new_capacity < capacity ||
+                new_capacity > SIZE_MAX / sizeof(*new_items)) {
                 telos_value_release(item);
                 release_values(items, count);
-                set_error(
-                    parser->error,
-                    TELOS_ERROR_DOMAIN_MEMORY,
-                    2,
-                    "JSON array is too large"
-                );
+                set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 2,
+                          "JSON array is too large");
                 return NULL;
             }
             new_items = realloc(items, new_capacity * sizeof(*new_items));
             if (new_items == NULL) {
                 telos_value_release(item);
                 release_values(items, count);
-                set_error(
-                    parser->error,
-                    TELOS_ERROR_DOMAIN_MEMORY,
-                    1,
-                    "could not allocate JSON array"
-                );
+                set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                          "could not allocate JSON array");
                 return NULL;
             }
             items = new_items;
@@ -653,17 +563,11 @@ static struct telos_value *parse_array(
         if (parser->current < parser->end && *parser->current == ']') {
             ++parser->current;
             result = telos_value_new_array(
-                (const struct telos_value *const *)items,
-                count
-            );
+                (const struct telos_value *const *)items, count);
             release_values(items, count);
             if (result == NULL) {
-                set_error(
-                    parser->error,
-                    TELOS_ERROR_DOMAIN_MEMORY,
-                    1,
-                    "could not create JSON array"
-                );
+                set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                          "could not create JSON array");
             }
             return result;
         }
@@ -671,20 +575,13 @@ static struct telos_value *parse_array(
     }
 
     release_values(items, count);
-    set_error(
-        parser->error,
-        TELOS_ERROR_DOMAIN_PROTOCOL,
-        4,
-        "expected ',' or ']' in JSON array"
-    );
+    set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 4,
+              "expected ',' or ']' in JSON array");
     return NULL;
 }
 
-static void release_object_parts(
-    char **keys,
-    struct telos_value **values,
-    size_t count
-)
+static void
+release_object_parts(char **keys, struct telos_value **values, size_t count)
 {
     for (size_t index = 0; index < count; ++index) {
         free(keys[index]);
@@ -694,21 +591,16 @@ static void release_object_parts(
     free(values);
 }
 
-static bool grow_object_parts(
-    char ***keys,
-    struct telos_value ***values,
-    size_t *capacity
-)
+static bool
+grow_object_parts(char ***keys, struct telos_value ***values, size_t *capacity)
 {
     size_t new_capacity = *capacity == 0 ? 4 : *capacity * 2;
     char **new_keys;
     struct telos_value **new_values;
 
-    if (
-        new_capacity < *capacity
-        || new_capacity > SIZE_MAX / sizeof(*new_keys)
-        || new_capacity > SIZE_MAX / sizeof(*new_values)
-    ) {
+    if (new_capacity < *capacity ||
+        new_capacity > SIZE_MAX / sizeof(*new_keys) ||
+        new_capacity > SIZE_MAX / sizeof(*new_values)) {
         return false;
     }
     new_keys = realloc(*keys, new_capacity * sizeof(*new_keys));
@@ -726,10 +618,8 @@ static bool grow_object_parts(
     return true;
 }
 
-static struct telos_value *parse_object(
-    struct json_parser *parser,
-    unsigned int depth
-)
+static struct telos_value *parse_object(struct json_parser *parser,
+                                        unsigned int depth)
 {
     char **keys = NULL;
     struct telos_value **values = NULL;
@@ -756,12 +646,8 @@ static struct telos_value *parse_object(
             if (strcmp(keys[index], key) == 0) {
                 free(key);
                 release_object_parts(keys, values, count);
-                set_error(
-                    parser->error,
-                    TELOS_ERROR_DOMAIN_PROTOCOL,
-                    5,
-                    "duplicate key in JSON object"
-                );
+                set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 5,
+                          "duplicate key in JSON object");
                 return NULL;
             }
         }
@@ -770,12 +656,8 @@ static struct telos_value *parse_object(
         if (parser->current >= parser->end || *parser->current != ':') {
             free(key);
             release_object_parts(keys, values, count);
-            set_error(
-                parser->error,
-                TELOS_ERROR_DOMAIN_PROTOCOL,
-                6,
-                "expected ':' in JSON object"
-            );
+            set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 6,
+                      "expected ':' in JSON object");
             return NULL;
         }
         ++parser->current;
@@ -787,20 +669,13 @@ static struct telos_value *parse_object(
             return NULL;
         }
 
-        if (count == capacity && !grow_object_parts(
-            &keys,
-            &values,
-            &capacity
-        )) {
+        if (count == capacity &&
+            !grow_object_parts(&keys, &values, &capacity)) {
             free(key);
             telos_value_release(value);
             release_object_parts(keys, values, count);
-            set_error(
-                parser->error,
-                TELOS_ERROR_DOMAIN_MEMORY,
-                1,
-                "could not allocate JSON object"
-            );
+            set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                      "could not allocate JSON object");
             return NULL;
         }
         keys[count] = key;
@@ -817,17 +692,11 @@ static struct telos_value *parse_object(
             ++parser->current;
             result = telos_value_new_object(
                 (const char *const *)keys,
-                (const struct telos_value *const *)values,
-                count
-            );
+                (const struct telos_value *const *)values, count);
             release_object_parts(keys, values, count);
             if (result == NULL) {
-                set_error(
-                    parser->error,
-                    TELOS_ERROR_DOMAIN_MEMORY,
-                    1,
-                    "could not create JSON object"
-                );
+                set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                          "could not create JSON object");
             }
             return result;
         }
@@ -835,12 +704,8 @@ static struct telos_value *parse_object(
     }
 
     release_object_parts(keys, values, count);
-    set_error(
-        parser->error,
-        TELOS_ERROR_DOMAIN_PROTOCOL,
-        7,
-        "expected ',' or '}' in JSON object"
-    );
+    set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 7,
+              "expected ',' or '}' in JSON object");
     return NULL;
 }
 
@@ -848,10 +713,8 @@ static bool parser_literal(struct json_parser *parser, const char *literal)
 {
     size_t size = strlen(literal);
 
-    if (
-        (size_t)(parser->end - parser->current) < size
-        || memcmp(parser->current, literal, size) != 0
-    ) {
+    if ((size_t)(parser->end - parser->current) < size ||
+        memcmp(parser->current, literal, size) != 0) {
         return false;
     }
     parser->current += size;
@@ -875,22 +738,15 @@ static struct telos_value *parse_number(struct json_parser *parser)
     }
     if (*parser->current == '0') {
         ++parser->current;
-        if (
-            parser->current < parser->end
-            && isdigit((unsigned char)*parser->current)
-        ) {
+        if (parser->current < parser->end &&
+            isdigit((unsigned char)*parser->current)) {
             goto invalid;
         }
-    } else if (
-        *parser->current >= '1'
-        && *parser->current <= '9'
-    ) {
+    } else if (*parser->current >= '1' && *parser->current <= '9') {
         do {
             ++parser->current;
-        } while (
-            parser->current < parser->end
-            && isdigit((unsigned char)*parser->current)
-        );
+        } while (parser->current < parser->end &&
+                 isdigit((unsigned char)*parser->current));
     } else {
         goto invalid;
     }
@@ -898,41 +754,29 @@ static struct telos_value *parse_number(struct json_parser *parser)
     if (parser->current < parser->end && *parser->current == '.') {
         real = true;
         ++parser->current;
-        if (
-            parser->current >= parser->end
-            || !isdigit((unsigned char)*parser->current)
-        ) {
+        if (parser->current >= parser->end ||
+            !isdigit((unsigned char)*parser->current)) {
             goto invalid;
         }
-        while (
-            parser->current < parser->end
-            && isdigit((unsigned char)*parser->current)
-        ) {
+        while (parser->current < parser->end &&
+               isdigit((unsigned char)*parser->current)) {
             ++parser->current;
         }
     }
-    if (
-        parser->current < parser->end
-        && (*parser->current == 'e' || *parser->current == 'E')
-    ) {
+    if (parser->current < parser->end &&
+        (*parser->current == 'e' || *parser->current == 'E')) {
         real = true;
         ++parser->current;
-        if (
-            parser->current < parser->end
-            && (*parser->current == '+' || *parser->current == '-')
-        ) {
+        if (parser->current < parser->end &&
+            (*parser->current == '+' || *parser->current == '-')) {
             ++parser->current;
         }
-        if (
-            parser->current >= parser->end
-            || !isdigit((unsigned char)*parser->current)
-        ) {
+        if (parser->current >= parser->end ||
+            !isdigit((unsigned char)*parser->current)) {
             goto invalid;
         }
-        while (
-            parser->current < parser->end
-            && isdigit((unsigned char)*parser->current)
-        ) {
+        while (parser->current < parser->end &&
+               isdigit((unsigned char)*parser->current)) {
             ++parser->current;
         }
     }
@@ -940,12 +784,8 @@ static struct telos_value *parse_number(struct json_parser *parser)
     size = (size_t)(parser->current - start);
     text = malloc(size + 1);
     if (text == NULL) {
-        set_error(
-            parser->error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            1,
-            "could not allocate JSON number"
-        );
+        set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                  "could not allocate JSON number");
         return NULL;
     }
     memcpy(text, start, size);
@@ -954,67 +794,45 @@ static struct telos_value *parse_number(struct json_parser *parser)
     if (real) {
         double value = strtod(text, &number_end);
 
-        result = errno == 0
-            && number_end == text + size
-            && isfinite(value)
-            ? telos_value_new_real(value)
-            : NULL;
+        result = errno == 0 && number_end == text + size && isfinite(value)
+                     ? telos_value_new_real(value)
+                     : NULL;
     } else {
         intmax_t value = strtoimax(text, &number_end, 10);
 
-        result = errno == 0
-            && number_end == text + size
-            && value >= INT64_MIN
-            && value <= INT64_MAX
-            ? telos_value_new_integer((int64_t)value)
-            : NULL;
+        result = errno == 0 && number_end == text + size &&
+                         value >= INT64_MIN && value <= INT64_MAX
+                     ? telos_value_new_integer((int64_t)value)
+                     : NULL;
     }
     free(text);
     if (result == NULL) {
-        set_error(
-            parser->error,
-            TELOS_ERROR_DOMAIN_PROTOCOL,
-            8,
-            "JSON number is out of range"
-        );
+        set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 8,
+                  "JSON number is out of range");
     }
     return result;
 
 invalid:
-    set_error(
-        parser->error,
-        TELOS_ERROR_DOMAIN_PROTOCOL,
-        9,
-        "invalid JSON number"
-    );
+    set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 9,
+              "invalid JSON number");
     return NULL;
 }
 
-static struct telos_value *parse_value(
-    struct json_parser *parser,
-    unsigned int depth
-)
+static struct telos_value *parse_value(struct json_parser *parser,
+                                       unsigned int depth)
 {
     char *string;
     struct telos_value *result;
 
     if (depth > TELOS_JSON_MAX_DEPTH) {
-        set_error(
-            parser->error,
-            TELOS_ERROR_DOMAIN_PROTOCOL,
-            10,
-            "JSON nesting limit exceeded"
-        );
+        set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 10,
+                  "JSON nesting limit exceeded");
         return NULL;
     }
     parser_skip_whitespace(parser);
     if (parser->current >= parser->end) {
-        set_error(
-            parser->error,
-            TELOS_ERROR_DOMAIN_PROTOCOL,
-            11,
-            "expected a JSON value"
-        );
+        set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 11,
+                  "expected a JSON value");
         return NULL;
     }
 
@@ -1042,12 +860,8 @@ static struct telos_value *parse_value(
         result = telos_value_new_string(string);
         free(string);
         if (result == NULL) {
-            set_error(
-                parser->error,
-                TELOS_ERROR_DOMAIN_MEMORY,
-                1,
-                "could not create JSON string"
-            );
+            set_error(parser->error, TELOS_ERROR_DOMAIN_MEMORY, 1,
+                      "could not create JSON string");
         }
         return result;
     case '[':
@@ -1055,28 +869,21 @@ static struct telos_value *parse_value(
     case '{':
         return parse_object(parser, depth);
     default:
-        if (*parser->current == '-' || isdigit(
-            (unsigned char)*parser->current
-        )) {
+        if (*parser->current == '-' ||
+            isdigit((unsigned char)*parser->current)) {
             return parse_number(parser);
         }
         break;
     }
 
-    set_error(
-        parser->error,
-        TELOS_ERROR_DOMAIN_PROTOCOL,
-        12,
-        "invalid JSON value"
-    );
+    set_error(parser->error, TELOS_ERROR_DOMAIN_PROTOCOL, 12,
+              "invalid JSON value");
     return NULL;
 }
 
-struct telos_value *telos_value_parse_json(
-    const char *json,
-    size_t size,
-    struct telos_error **error
-)
+struct telos_value *telos_value_parse_json(const char *json,
+                                           size_t size,
+                                           struct telos_error **error)
 {
     struct json_parser parser;
     struct telos_value *result;
@@ -1085,12 +892,8 @@ struct telos_value *telos_value_parse_json(
         *error = NULL;
     }
     if (json == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            1,
-            "JSON input is required"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, 1,
+                  "JSON input is required");
         return NULL;
     }
 
@@ -1105,12 +908,8 @@ struct telos_value *telos_value_parse_json(
     parser_skip_whitespace(&parser);
     if (parser.current != parser.end) {
         telos_value_release(result);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_PROTOCOL,
-            13,
-            "unexpected data after JSON value"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, 13,
+                  "unexpected data after JSON value");
         return NULL;
     }
     return result;

@@ -130,10 +130,8 @@ struct telos_value *telos_value_new_sensitive(const char *value)
     return result;
 }
 
-struct telos_value *telos_value_new_array(
-    const struct telos_value *const *items,
-    size_t count
-)
+struct telos_value *
+telos_value_new_array(const struct telos_value *const *items, size_t count)
 {
     struct telos_value *result;
 
@@ -151,10 +149,8 @@ struct telos_value *telos_value_new_array(
     }
 
     if (count > 0) {
-        result->data.array.items = calloc(
-            count,
-            sizeof(*result->data.array.items)
-        );
+        result->data.array.items =
+            calloc(count, sizeof(*result->data.array.items));
         if (result->data.array.items == NULL) {
             free(result);
             return NULL;
@@ -174,11 +170,10 @@ struct telos_value *telos_value_new_array(
     return result;
 }
 
-struct telos_value *telos_value_new_object(
-    const char *const *keys,
-    const struct telos_value *const *values,
-    size_t count
-)
+struct telos_value *
+telos_value_new_object(const char *const *keys,
+                       const struct telos_value *const *values,
+                       size_t count)
 {
     struct telos_value *result;
 
@@ -196,10 +191,8 @@ struct telos_value *telos_value_new_object(
     }
 
     if (count > 0) {
-        result->data.object.entries = calloc(
-            count,
-            sizeof(*result->data.object.entries)
-        );
+        result->data.object.entries =
+            calloc(count, sizeof(*result->data.object.entries));
         if (result->data.object.entries == NULL) {
             free(result);
             return NULL;
@@ -228,11 +221,7 @@ struct telos_value *telos_value_new_object(
             return NULL;
         }
 
-        memcpy(
-            result->data.object.entries[index].key,
-            keys[index],
-            key_size
-        );
+        memcpy(result->data.object.entries[index].key, keys[index], key_size);
         result->data.object.entries[index].value =
             telos_value_retain(values[index]);
         result->data.object.count += 1;
@@ -246,11 +235,8 @@ struct telos_value *telos_value_retain(const struct telos_value *value)
     struct telos_value *mutable_value = (struct telos_value *)value;
 
     if (mutable_value != NULL) {
-        atomic_fetch_add_explicit(
-            &mutable_value->references,
-            1,
-            memory_order_relaxed
-        );
+        atomic_fetch_add_explicit(&mutable_value->references, 1,
+                                  memory_order_relaxed);
     }
 
     return mutable_value;
@@ -264,37 +250,23 @@ void telos_value_release(const struct telos_value *value)
         return;
     }
 
-    if (
-        atomic_fetch_sub_explicit(
-            &mutable_value->references,
-            1,
-            memory_order_acq_rel
-        ) == 1
-    ) {
-        if (
-            mutable_value->type == TELOS_VALUE_STRING
-            || mutable_value->type == TELOS_VALUE_SENSITIVE
-        ) {
+    if (atomic_fetch_sub_explicit(&mutable_value->references, 1,
+                                  memory_order_acq_rel) == 1) {
+        if (mutable_value->type == TELOS_VALUE_STRING ||
+            mutable_value->type == TELOS_VALUE_SENSITIVE) {
             free(mutable_value->data.string);
         } else if (mutable_value->type == TELOS_VALUE_ARRAY) {
-            for (
-                size_t index = 0;
-                index < mutable_value->data.array.count;
-                ++index
-            ) {
+            for (size_t index = 0; index < mutable_value->data.array.count;
+                 ++index) {
                 telos_value_release(mutable_value->data.array.items[index]);
             }
             free(mutable_value->data.array.items);
         } else if (mutable_value->type == TELOS_VALUE_OBJECT) {
-            for (
-                size_t index = 0;
-                index < mutable_value->data.object.count;
-                ++index
-            ) {
+            for (size_t index = 0; index < mutable_value->data.object.count;
+                 ++index) {
                 free(mutable_value->data.object.entries[index].key);
                 telos_value_release(
-                    mutable_value->data.object.entries[index].value
-                );
+                    mutable_value->data.object.entries[index].value);
             }
             free(mutable_value->data.object.entries);
         }
@@ -313,11 +285,7 @@ enum telos_value_type telos_value_type(const struct telos_value *value)
 
 bool telos_value_boolean(const struct telos_value *value, bool *result)
 {
-    if (
-        value == NULL
-        || result == NULL
-        || value->type != TELOS_VALUE_BOOLEAN
-    ) {
+    if (value == NULL || result == NULL || value->type != TELOS_VALUE_BOOLEAN) {
         return false;
     }
 
@@ -327,11 +295,7 @@ bool telos_value_boolean(const struct telos_value *value, bool *result)
 
 bool telos_value_integer(const struct telos_value *value, int64_t *result)
 {
-    if (
-        value == NULL
-        || result == NULL
-        || value->type != TELOS_VALUE_INTEGER
-    ) {
+    if (value == NULL || result == NULL || value->type != TELOS_VALUE_INTEGER) {
         return false;
     }
 
@@ -341,11 +305,7 @@ bool telos_value_integer(const struct telos_value *value, int64_t *result)
 
 bool telos_value_real(const struct telos_value *value, double *result)
 {
-    if (
-        value == NULL
-        || result == NULL
-        || value->type != TELOS_VALUE_REAL
-    ) {
+    if (value == NULL || result == NULL || value->type != TELOS_VALUE_REAL) {
         return false;
     }
 
@@ -379,42 +339,29 @@ size_t telos_value_count(const struct telos_value *value)
     return 0;
 }
 
-const struct telos_value *telos_value_at(
-    const struct telos_value *value,
-    size_t index
-)
+const struct telos_value *telos_value_at(const struct telos_value *value,
+                                         size_t index)
 {
-    if (
-        value == NULL
-        || value->type != TELOS_VALUE_ARRAY
-        || index >= value->data.array.count
-    ) {
+    if (value == NULL || value->type != TELOS_VALUE_ARRAY ||
+        index >= value->data.array.count) {
         return NULL;
     }
 
     return value->data.array.items[index];
 }
 
-const char *telos_value_key_at(
-    const struct telos_value *value,
-    size_t index
-)
+const char *telos_value_key_at(const struct telos_value *value, size_t index)
 {
-    if (
-        value == NULL
-        || value->type != TELOS_VALUE_OBJECT
-        || index >= value->data.object.count
-    ) {
+    if (value == NULL || value->type != TELOS_VALUE_OBJECT ||
+        index >= value->data.object.count) {
         return NULL;
     }
 
     return value->data.object.entries[index].key;
 }
 
-const struct telos_value *telos_value_get(
-    const struct telos_value *value,
-    const char *key
-)
+const struct telos_value *telos_value_get(const struct telos_value *value,
+                                          const char *key)
 {
     if (value == NULL || value->type != TELOS_VALUE_OBJECT || key == NULL) {
         return NULL;
@@ -429,10 +376,8 @@ const struct telos_value *telos_value_get(
     return NULL;
 }
 
-bool telos_value_equal(
-    const struct telos_value *lhs,
-    const struct telos_value *rhs
-)
+bool telos_value_equal(const struct telos_value *lhs,
+                       const struct telos_value *rhs)
 {
     if (lhs == rhs) {
         return true;
@@ -458,10 +403,8 @@ bool telos_value_equal(
             return false;
         }
         for (size_t index = 0; index < lhs->data.array.count; ++index) {
-            if (!telos_value_equal(
-                lhs->data.array.items[index],
-                rhs->data.array.items[index]
-            )) {
+            if (!telos_value_equal(lhs->data.array.items[index],
+                                   rhs->data.array.items[index])) {
                 return false;
             }
         }
@@ -473,10 +416,7 @@ bool telos_value_equal(
         for (size_t index = 0; index < lhs->data.object.count; ++index) {
             const struct telos_object_entry *entry =
                 &lhs->data.object.entries[index];
-            const struct telos_value *other = telos_value_get(
-                rhs,
-                entry->key
-            );
+            const struct telos_value *other = telos_value_get(rhs, entry->key);
 
             if (!telos_value_equal(entry->value, other)) {
                 return false;

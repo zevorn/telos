@@ -35,12 +35,10 @@ static const struct telos_event_api_v1 event_api = {
     .release = telos_event_release,
 };
 
-static void set_error(
-    struct telos_error **error,
-    enum telos_error_domain domain,
-    int code,
-    const char *message
-)
+static void set_error(struct telos_error **error,
+                      enum telos_error_domain domain,
+                      int code,
+                      const char *message)
 {
     if (error != NULL) {
         *error = telos_error_create(domain, code, message, NULL);
@@ -58,26 +56,19 @@ static char *copy_string(const char *value)
     return copy;
 }
 
-bool telos_host_api_v1_initialize(
-    struct telos_host_api_v1 *host,
-    void *context,
-    void (*log)(void *context, int level, const char *message),
-    struct telos_error **error
-)
+bool telos_host_api_v1_initialize(telos_host_api_v1 *host, void *context,
+                                  telos_log_fn log,
+                                  struct telos_error **error)
 {
     if (error != NULL) {
         *error = NULL;
     }
     if (host == NULL || log == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Plugin Host API and bootstrap logger are required"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Plugin Host API and bootstrap logger are required");
         return false;
     }
-    *host = (struct telos_host_api_v1) {
+    *host = (struct telos_host_api_v1){
         .abi_version = TELOS_PLUGIN_ABI_VERSION,
         .struct_size = sizeof(*host),
         .context = context,
@@ -90,10 +81,8 @@ bool telos_host_api_v1_initialize(
     return true;
 }
 
-struct telos_plugin_instance *telos_plugin_instance_create(
-    const char *id,
-    struct telos_error **error
-)
+struct telos_plugin_instance *
+telos_plugin_instance_create(const char *id, struct telos_error **error)
 {
     struct telos_plugin_instance *instance;
     int result;
@@ -102,45 +91,29 @@ struct telos_plugin_instance *telos_plugin_instance_create(
         *error = NULL;
     }
     if (id == NULL || id[0] == '\0') {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Plugin ID is required"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Plugin ID is required");
         return NULL;
     }
     instance = calloc(1, sizeof(*instance));
     if (instance == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "Plugin instance allocation failed"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Plugin instance allocation failed");
         return NULL;
     }
     instance->id = copy_string(id);
     if (instance->id == NULL) {
         free(instance);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "Plugin ID allocation failed"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Plugin ID allocation failed");
         return NULL;
     }
     result = pthread_mutex_init(&instance->mutex, NULL);
     if (result != 0) {
         free(instance->id);
         free(instance);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            result,
-            "Plugin mutex initialization failed"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, result,
+                  "Plugin mutex initialization failed");
         return NULL;
     }
     atomic_init(&instance->references, 1);
@@ -148,47 +121,35 @@ struct telos_plugin_instance *telos_plugin_instance_create(
     return instance;
 }
 
-struct telos_plugin_instance *telos_plugin_instance_retain(
-    const struct telos_plugin_instance *instance
-)
+struct telos_plugin_instance *
+telos_plugin_instance_retain(const struct telos_plugin_instance *instance)
 {
     struct telos_plugin_instance *mutable_instance =
         (struct telos_plugin_instance *)instance;
 
     if (mutable_instance != NULL) {
-        atomic_fetch_add_explicit(
-            &mutable_instance->references,
-            1,
-            memory_order_relaxed
-        );
+        atomic_fetch_add_explicit(&mutable_instance->references, 1,
+                                  memory_order_relaxed);
     }
     return mutable_instance;
 }
 
-void telos_plugin_instance_release(
-    const struct telos_plugin_instance *instance
-)
+void telos_plugin_instance_release(const struct telos_plugin_instance *instance)
 {
     struct telos_plugin_instance *mutable_instance =
         (struct telos_plugin_instance *)instance;
 
-    if (
-        mutable_instance != NULL
-        && atomic_fetch_sub_explicit(
-            &mutable_instance->references,
-            1,
-            memory_order_acq_rel
-        ) == 1
-    ) {
+    if (mutable_instance != NULL &&
+        atomic_fetch_sub_explicit(&mutable_instance->references, 1,
+                                  memory_order_acq_rel) == 1) {
         pthread_mutex_destroy(&mutable_instance->mutex);
         free(mutable_instance->id);
         free(mutable_instance);
     }
 }
 
-enum telos_plugin_state telos_plugin_instance_state(
-    const struct telos_plugin_instance *instance
-)
+enum telos_plugin_state
+telos_plugin_instance_state(const struct telos_plugin_instance *instance)
 {
     struct telos_plugin_instance *mutable_instance =
         (struct telos_plugin_instance *)instance;
@@ -203,33 +164,23 @@ enum telos_plugin_state telos_plugin_instance_state(
     return state;
 }
 
-bool telos_plugin_instance_set_healthy(
-    struct telos_plugin_instance *instance,
-    bool healthy,
-    struct telos_error **error
-)
+bool telos_plugin_instance_set_healthy(struct telos_plugin_instance *instance,
+                                       bool healthy,
+                                       struct telos_error **error)
 {
     if (error != NULL) {
         *error = NULL;
     }
     if (instance == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Plugin instance is required"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Plugin instance is required");
         return false;
     }
     pthread_mutex_lock(&instance->mutex);
     if (instance->state != TELOS_PLUGIN_INITIALIZING) {
         pthread_mutex_unlock(&instance->mutex);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            EINVAL,
-            "Plugin health can only be set while initializing"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, EINVAL,
+                  "Plugin health can only be set while initializing");
         return false;
     }
     instance->healthy = healthy;
@@ -237,10 +188,8 @@ bool telos_plugin_instance_set_healthy(
     return true;
 }
 
-static bool transition_allowed(
-    enum telos_plugin_state current,
-    enum telos_plugin_state next
-)
+static bool transition_allowed(enum telos_plugin_state current,
+                               enum telos_plugin_state next)
 {
     switch (current) {
     case TELOS_PLUGIN_DISCOVERED:
@@ -262,60 +211,37 @@ static bool transition_allowed(
     }
 }
 
-bool telos_plugin_instance_transition(
-    struct telos_plugin_instance *instance,
-    enum telos_plugin_state next,
-    struct telos_error **error
-)
+bool telos_plugin_instance_transition(struct telos_plugin_instance *instance,
+                                      enum telos_plugin_state next,
+                                      struct telos_error **error)
 {
     if (error != NULL) {
         *error = NULL;
     }
     if (instance == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Plugin instance is required"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Plugin instance is required");
         return false;
     }
 
     pthread_mutex_lock(&instance->mutex);
     if (!transition_allowed(instance->state, next)) {
         pthread_mutex_unlock(&instance->mutex);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            EINVAL,
-            "Plugin lifecycle transition is invalid"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, EINVAL,
+                  "Plugin lifecycle transition is invalid");
         return false;
     }
     if (next == TELOS_PLUGIN_ACTIVE && !instance->healthy) {
         pthread_mutex_unlock(&instance->mutex);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_PLUGIN,
-            EHOSTDOWN,
-            "Plugin health check did not pass"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_PLUGIN, EHOSTDOWN,
+                  "Plugin health check did not pass");
         return false;
     }
-    if (
-        next == TELOS_PLUGIN_STOPPED
-        && atomic_load_explicit(
-            &instance->references,
-            memory_order_acquire
-        ) > 1
-    ) {
+    if (next == TELOS_PLUGIN_STOPPED &&
+        atomic_load_explicit(&instance->references, memory_order_acquire) > 1) {
         pthread_mutex_unlock(&instance->mutex);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            EBUSY,
-            "Plugin is still pinned by an active Session"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, EBUSY,
+                  "Plugin is still pinned by an active Session");
         return false;
     }
     instance->state = next;

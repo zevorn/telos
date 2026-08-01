@@ -34,13 +34,10 @@ static bool parse_half(const char *text, uint64_t *value)
 
 struct telos_id telos_id_generate(void)
 {
-    const uint64_t sequence = atomic_fetch_add_explicit(
-        &next_id,
-        1,
-        memory_order_relaxed
-    );
+    const uint64_t sequence =
+        atomic_fetch_add_explicit(&next_id, 1, memory_order_relaxed);
 
-    return (struct telos_id) {
+    return (struct telos_id){
         .high = UINT64_C(0x54454c4f53000000),
         .low = sequence,
     };
@@ -51,11 +48,7 @@ bool telos_id_equal(struct telos_id lhs, struct telos_id rhs)
     return lhs.high == rhs.high && lhs.low == rhs.low;
 }
 
-bool telos_id_format(
-    struct telos_id id,
-    char *buffer,
-    size_t buffer_size
-)
+bool telos_id_format(struct telos_id id, char *buffer, size_t buffer_size)
 {
     int written;
 
@@ -63,13 +56,8 @@ bool telos_id_format(
         return false;
     }
 
-    written = snprintf(
-        buffer,
-        buffer_size,
-        "%016" PRIx64 "%016" PRIx64,
-        id.high,
-        id.low
-    );
+    written = snprintf(buffer, buffer_size, "%016" PRIx64 "%016" PRIx64,
+                       id.high, id.low);
 
     return written == TELOS_ID_TEXT_SIZE - 1;
 }
@@ -82,7 +70,8 @@ bool telos_id_parse(const char *text, struct telos_id *id)
         return false;
     }
 
-    if (!parse_half(text, &parsed.high) || !parse_half(text + 16, &parsed.low)) {
+    if (!parse_half(text, &parsed.high) ||
+        !parse_half(text + 16, &parsed.low)) {
         return false;
     }
 

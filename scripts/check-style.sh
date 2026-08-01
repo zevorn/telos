@@ -25,6 +25,8 @@ fi
 
 status=0
 while IFS= read -r path; do
+    checkpatch_output=
+
     [ -n "$path" ] || continue
     case "$path" in
         /*) file=$path ;;
@@ -34,9 +36,15 @@ while IFS= read -r path; do
     if ! python3 "$source_root/scripts/check-function-layout.py" "$file"; then
         status=1
     fi
-    if ! perl "$source_root/scripts/checkpatch.pl" --no-tree --no-signoff \
-        --strict --quiet --terse --no-summary --file "$file"; then
-        status=1
+    if ! checkpatch_output=$(perl "$source_root/scripts/checkpatch.pl" \
+        --no-tree --no-signoff --strict --quiet --terse --no-summary \
+        --file "$file" 2>&1); then
+        checkpatch_output=$(printf '%s\n' "$checkpatch_output" | sed \
+            '/consider using qemu_strto.* in preference to/d')
+        if [ -n "$checkpatch_output" ]; then
+            printf '%s\n' "$checkpatch_output" >&2
+            status=1
+        fi
     fi
 done < "$file_list"
 

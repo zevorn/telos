@@ -10,7 +10,7 @@ import sys
 
 
 FUNCTION_SIGNATURE = re.compile(
-    r"^\s*(?!#)(?!typedef\b)(?!=)"
+    r"^\s*(?!#)(?!typedef\b)(?![A-Z][A-Z0-9_]*\s*\()(?!=)"
     r"[^=;]*?(?P<name>[a-z_][_A-Za-z0-9]*)\("
 )
 FUNCTION_POINTER_SIGNATURE = re.compile(

@@ -19,34 +19,20 @@ static void log_message(void *context, int level, const char *message)
     fprintf(stderr, "plugin[%d]: %s\n", level, message);
 }
 
-static bool plugin_runtime_load(
-    struct plugin_runtime *runtime,
-    const char *path,
-    const char *plugin_id,
-    struct telos_error **error
-)
+static bool plugin_runtime_load(struct plugin_runtime *runtime,
+                                const char *path,
+                                const char *plugin_id,
+                                struct telos_error **error)
 {
     struct telos_host_api_v1 host;
 
     runtime->registry = telos_registry_create(NULL, 0, error);
-    if (
-        runtime->registry == NULL
-        || !telos_host_api_v1_initialize(
-            &host,
-            NULL,
-            log_message,
-            error
-        )
-    ) {
+    if (runtime->registry == NULL ||
+        !telos_host_api_v1_initialize(&host, NULL, log_message, error)) {
         return false;
     }
     runtime->module = telos_plugin_module_load_inprocess(
-        path,
-        plugin_id,
-        &host,
-        runtime->registry,
-        error
-    );
+        path, plugin_id, &host, runtime->registry, error);
     if (runtime->module == NULL) {
         return false;
     }
@@ -62,10 +48,8 @@ static void plugin_runtime_clear(struct plugin_runtime *runtime)
     memset(runtime, 0, sizeof(*runtime));
 }
 
-static struct telos_value *response(
-    const char *type,
-    const struct telos_value *body
-)
+static struct telos_value *response(const char *type,
+                                    const struct telos_value *body)
 {
     struct telos_value *version = telos_value_new_integer(TELOS_RPC_VERSION);
     struct telos_value *type_value = telos_value_new_string(type);
@@ -91,66 +75,39 @@ static struct telos_value *response_without_body(const char *type)
     return message;
 }
 
-static struct telos_value *execute_tool(
-    const struct plugin_runtime *runtime,
-    const struct telos_value *request_body,
-    struct telos_error **error
-)
+static struct telos_value *execute_tool(const struct plugin_runtime *runtime,
+                                        const struct telos_value *request_body,
+                                        struct telos_error **error)
 {
-    const char *id = telos_value_string(
-        telos_value_get(request_body, "id")
-    );
-    const struct telos_value *arguments = telos_value_get(
-        request_body,
-        "arguments"
-    );
+    const char *id = telos_value_string(telos_value_get(request_body, "id"));
+    const struct telos_value *arguments =
+        telos_value_get(request_body, "arguments");
     const struct telos_extension_descriptor *descriptor =
-        telos_registry_generation_find(
-            runtime->generation,
-            TELOS_EXTENSION_TOOL,
-            id
-        );
-    const struct telos_tool_definition *tool = descriptor == NULL
-        ? NULL
-        : descriptor->implementation;
+        telos_registry_generation_find(runtime->generation,
+                                       TELOS_EXTENSION_TOOL, id);
+    const struct telos_tool_definition *tool =
+        descriptor == NULL ? NULL : descriptor->implementation;
     const struct telos_tool_context context = {0};
     struct telos_value *result = NULL;
 
-    if (
-        id == NULL
-        || arguments == NULL
-        || tool == NULL
-        || tool->id == NULL
-        || strcmp(tool->id, id) != 0
-        || tool->execute == NULL
-    ) {
-        *error = telos_error_create(
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            ENOENT,
-            "Process Tool is unavailable",
-            NULL
-        );
+    if (id == NULL || arguments == NULL || tool == NULL || tool->id == NULL ||
+        strcmp(tool->id, id) != 0 || tool->execute == NULL) {
+        *error = telos_error_create(TELOS_ERROR_DOMAIN_ARGUMENT, ENOENT,
+                                    "Process Tool is unavailable", NULL);
         return NULL;
     }
     if (!tool->execute(&context, arguments, &result, error)) {
         if (*error == NULL) {
-            *error = telos_error_create(
-                TELOS_ERROR_DOMAIN_PLUGIN,
-                EIO,
-                "Process Tool failed without an error",
-                NULL
-            );
+            *error = telos_error_create(TELOS_ERROR_DOMAIN_PLUGIN, EIO,
+                                        "Process Tool failed without an error",
+                                        NULL);
         }
         telos_value_release(result);
         return NULL;
     }
     if (result == NULL) {
-        *error = telos_error_create(
-            TELOS_ERROR_DOMAIN_PROTOCOL,
-            EPROTO,
-            "Process Tool returned no result",
-            NULL
-        );
+        *error = telos_error_create(TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                                    "Process Tool returned no result", NULL);
     }
     return result;
 }
@@ -161,26 +118,20 @@ int main(int argc, char **argv)
     bool plugin_loaded = false;
 
     if (argc != 1 && argc != 3 && argc != 4) {
-        fputs(
-            "usage: telos-plugin-host [PLUGIN.so PLUGIN_ID]\n"
-            "       telos-plugin-host --health-check PLUGIN.so PLUGIN_ID\n",
-            stderr
-        );
+        fputs("usage: telos-plugin-host [PLUGIN.so PLUGIN_ID]\n"
+              "       telos-plugin-host --health-check PLUGIN.so PLUGIN_ID\n",
+              stderr);
         return 2;
     }
     if (argc == 4) {
         struct telos_error *error = NULL;
-        bool healthy = strcmp(argv[1], "--health-check") == 0
-            && plugin_runtime_load(&runtime, argv[2], argv[3], &error);
+        bool healthy = strcmp(argv[1], "--health-check") == 0 &&
+                       plugin_runtime_load(&runtime, argv[2], argv[3], &error);
 
         if (!healthy) {
-            fprintf(
-                stderr,
-                "telos-plugin-host: %s\n",
-                error == NULL
-                    ? "invalid health-check arguments"
-                    : telos_error_message(error)
-            );
+            fprintf(stderr, "telos-plugin-host: %s\n",
+                    error == NULL ? "invalid health-check arguments"
+                                  : telos_error_message(error));
         }
         telos_error_release(error);
         plugin_runtime_clear(&runtime);
@@ -189,18 +140,10 @@ int main(int argc, char **argv)
     if (argc == 3) {
         struct telos_error *error = NULL;
 
-        plugin_loaded = plugin_runtime_load(
-            &runtime,
-            argv[1],
-            argv[2],
-            &error
-        );
+        plugin_loaded = plugin_runtime_load(&runtime, argv[1], argv[2], &error);
         if (!plugin_loaded) {
-            fprintf(
-                stderr,
-                "telos-plugin-host: %s\n",
-                telos_error_message(error)
-            );
+            fprintf(stderr, "telos-plugin-host: %s\n",
+                    telos_error_message(error));
             telos_error_release(error);
             plugin_runtime_clear(&runtime);
             return 1;
@@ -209,22 +152,16 @@ int main(int argc, char **argv)
 
     for (;;) {
         struct telos_error *error = NULL;
-        struct telos_value *request = telos_rpc_read_frame(
-            0,
-            TELOS_RPC_MAX_FRAME_SIZE,
-            &error
-        );
+        struct telos_value *request =
+            telos_rpc_read_frame(0, TELOS_RPC_MAX_FRAME_SIZE, &error);
         const char *type;
         struct telos_value *body;
         struct telos_value *message;
         bool stopping = false;
 
         if (request == NULL) {
-            fprintf(
-                stderr,
-                "telos-plugin-host: %s\n",
-                telos_error_message(error)
-            );
+            fprintf(stderr, "telos-plugin-host: %s\n",
+                    telos_error_message(error));
             telos_error_release(error);
             plugin_runtime_clear(&runtime);
             return 1;
@@ -237,27 +174,18 @@ int main(int argc, char **argv)
             const struct telos_value *request_body =
                 telos_value_get(request, "body");
 
-            body = request_body == NULL
-                ? telos_value_new_null()
-                : telos_value_retain(request_body);
+            body = request_body == NULL ? telos_value_new_null()
+                                        : telos_value_retain(request_body);
             message = response("echo.result", body);
-        } else if (
-            strcmp(type, "tool.execute") == 0
-            && plugin_loaded
-        ) {
+        } else if (strcmp(type, "tool.execute") == 0 && plugin_loaded) {
             struct telos_error *tool_error = NULL;
 
-            body = execute_tool(
-                &runtime,
-                telos_value_get(request, "body"),
-                &tool_error
-            );
+            body = execute_tool(&runtime, telos_value_get(request, "body"),
+                                &tool_error);
             if (body == NULL) {
                 body = telos_value_new_string(
-                    tool_error == NULL
-                        ? "Process Tool failed"
-                        : telos_error_message(tool_error)
-                );
+                    tool_error == NULL ? "Process Tool failed"
+                                       : telos_error_message(tool_error));
                 message = response("error", body);
                 telos_error_release(tool_error);
             } else {
@@ -322,15 +250,9 @@ int main(int argc, char **argv)
         telos_value_release(body);
         telos_value_release(request);
 
-        if (
-            message == NULL
-            || !telos_rpc_write_frame(1, message, &error)
-        ) {
-            fprintf(
-                stderr,
-                "telos-plugin-host: %s\n",
-                telos_error_message(error)
-            );
+        if (message == NULL || !telos_rpc_write_frame(1, message, &error)) {
+            fprintf(stderr, "telos-plugin-host: %s\n",
+                    telos_error_message(error));
             telos_error_release(error);
             telos_value_release(message);
             plugin_runtime_clear(&runtime);

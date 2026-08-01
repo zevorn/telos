@@ -26,23 +26,19 @@ struct telos_session_actor {
     struct telos_error *failure;
 };
 
-static void set_error(
-    struct telos_error **error,
-    enum telos_error_domain domain,
-    int code,
-    const char *message,
-    const struct telos_error *cause
-)
+static void set_error(struct telos_error **error,
+                      enum telos_error_domain domain,
+                      int code,
+                      const char *message,
+                      const struct telos_error *cause)
 {
     if (error != NULL) {
         *error = telos_error_create(domain, code, message, cause);
     }
 }
 
-static void remember_failure(
-    struct telos_session_actor *actor,
-    const struct telos_error *error
-)
+static void remember_failure(struct telos_session_actor *actor,
+                             const struct telos_error *error)
 {
     pthread_mutex_lock(&actor->mutex);
     if (actor->failure == NULL) {
@@ -79,26 +75,16 @@ static void *actor_worker(void *context)
         pthread_mutex_unlock(&actor->mutex);
 
         pthread_mutex_lock(&actor->mutex);
-        applied = telos_session_machine_apply(
-            actor->machine,
-            queued->event,
-            &error
-        );
+        applied =
+            telos_session_machine_apply(actor->machine, queued->event, &error);
         state = telos_session_machine_state(actor->machine);
         pthread_mutex_unlock(&actor->mutex);
-        if (
-            applied
-            && actor->store != NULL
-            && !telos_event_store_append(actor->store, queued->event, &error)
-        ) {
+        if (applied && actor->store != NULL &&
+            !telos_event_store_append(actor->store, queued->event, &error)) {
             applied = false;
         }
         if (applied && actor->observer != NULL) {
-            actor->observer(
-                queued->event,
-                state,
-                actor->observer_context
-            );
+            actor->observer(queued->event, state, actor->observer_context);
         } else if (!applied) {
             remember_failure(actor, error);
         }
@@ -117,10 +103,9 @@ static void *actor_worker(void *context)
     return NULL;
 }
 
-struct telos_session_actor *telos_session_actor_create(
-    const struct telos_session_actor_spec *spec,
-    struct telos_error **error
-)
+struct telos_session_actor *
+telos_session_actor_create(const struct telos_session_actor_spec *spec,
+                           struct telos_error **error)
 {
     struct telos_session_actor *actor;
     int result;
@@ -130,39 +115,24 @@ struct telos_session_actor *telos_session_actor_create(
     }
     actor = calloc(1, sizeof(*actor));
     if (actor == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "Session Actor allocation failed",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Session Actor allocation failed", NULL);
         return NULL;
     }
 
     result = pthread_mutex_init(&actor->mutex, NULL);
     if (result != 0) {
         free(actor);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            result,
-            "Session Actor mutex initialization failed",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, result,
+                  "Session Actor mutex initialization failed", NULL);
         return NULL;
     }
     result = pthread_cond_init(&actor->wake, NULL);
     if (result != 0) {
         pthread_mutex_destroy(&actor->mutex);
         free(actor);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            result,
-            "Session Actor condition initialization failed",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, result,
+                  "Session Actor condition initialization failed", NULL);
         return NULL;
     }
     result = pthread_cond_init(&actor->idle, NULL);
@@ -170,13 +140,8 @@ struct telos_session_actor *telos_session_actor_create(
         pthread_cond_destroy(&actor->wake);
         pthread_mutex_destroy(&actor->mutex);
         free(actor);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            result,
-            "Session Actor idle condition initialization failed",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, result,
+                  "Session Actor idle condition initialization failed", NULL);
         return NULL;
     }
 
@@ -201,13 +166,8 @@ struct telos_session_actor *telos_session_actor_create(
         pthread_cond_destroy(&actor->wake);
         pthread_mutex_destroy(&actor->mutex);
         free(actor);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            result,
-            "Session Actor worker creation failed",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, result,
+                  "Session Actor worker creation failed", NULL);
         return NULL;
     }
     actor->thread_started = true;
@@ -245,11 +205,9 @@ void telos_session_actor_destroy(struct telos_session_actor *actor)
     free(actor);
 }
 
-bool telos_session_actor_submit(
-    struct telos_session_actor *actor,
-    const struct telos_event *event,
-    struct telos_error **error
-)
+bool telos_session_actor_submit(struct telos_session_actor *actor,
+                                const struct telos_event *event,
+                                struct telos_error **error)
 {
     struct actor_event *queued;
 
@@ -257,40 +215,26 @@ bool telos_session_actor_submit(
         *error = NULL;
     }
     if (actor == NULL || event == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Session Actor submission arguments are invalid",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Session Actor submission arguments are invalid", NULL);
         return false;
     }
 
     queued = calloc(1, sizeof(*queued));
     if (queued == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "Session Actor queue allocation failed",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Session Actor queue allocation failed", NULL);
         return false;
     }
     queued->event = telos_event_retain(event);
 
     pthread_mutex_lock(&actor->mutex);
     if (actor->stopping || actor->failure != NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            actor->stopping ? ECANCELED : EIO,
-            actor->stopping
-                ? "Session Actor is stopping"
-                : "Session Actor has failed",
-            actor->failure
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE,
+                  actor->stopping ? ECANCELED : EIO,
+                  actor->stopping ? "Session Actor is stopping"
+                                  : "Session Actor has failed",
+                  actor->failure);
         pthread_mutex_unlock(&actor->mutex);
         telos_event_release(queued->event);
         free(queued);
@@ -307,22 +251,15 @@ bool telos_session_actor_submit(
     return true;
 }
 
-bool telos_session_actor_wait_idle(
-    struct telos_session_actor *actor,
-    struct telos_error **error
-)
+bool telos_session_actor_wait_idle(struct telos_session_actor *actor,
+                                   struct telos_error **error)
 {
     if (error != NULL) {
         *error = NULL;
     }
     if (actor == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Session Actor is required",
-            NULL
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Session Actor is required", NULL);
         return false;
     }
 
@@ -331,13 +268,8 @@ bool telos_session_actor_wait_idle(
         pthread_cond_wait(&actor->idle, &actor->mutex);
     }
     if (actor->failure != NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_STATE,
-            EIO,
-            "Session Actor event processing failed",
-            actor->failure
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, EIO,
+                  "Session Actor event processing failed", actor->failure);
         pthread_mutex_unlock(&actor->mutex);
         return false;
     }
@@ -345,9 +277,8 @@ bool telos_session_actor_wait_idle(
     return true;
 }
 
-enum telos_session_state telos_session_actor_state(
-    struct telos_session_actor *actor
-)
+enum telos_session_state
+telos_session_actor_state(struct telos_session_actor *actor)
 {
     enum telos_session_state state;
 

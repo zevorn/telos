@@ -14,21 +14,16 @@ struct telos_error {
     char message[];
 };
 
-struct telos_error *telos_error_create(
-    enum telos_error_domain domain,
-    int code,
-    const char *message,
-    const struct telos_error *cause
-)
+struct telos_error *telos_error_create(enum telos_error_domain domain,
+                                       int code,
+                                       const char *message,
+                                       const struct telos_error *cause)
 {
     struct telos_error *error;
     size_t message_size;
 
-    if (
-        domain < TELOS_ERROR_DOMAIN_ARGUMENT
-        || domain > TELOS_ERROR_DOMAIN_PLUGIN
-        || message == NULL
-    ) {
+    if (domain < TELOS_ERROR_DOMAIN_ARGUMENT ||
+        domain > TELOS_ERROR_DOMAIN_PLUGIN || message == NULL) {
         return NULL;
     }
 
@@ -55,11 +50,8 @@ struct telos_error *telos_error_retain(const struct telos_error *error)
     struct telos_error *mutable_error = (struct telos_error *)error;
 
     if (mutable_error != NULL) {
-        atomic_fetch_add_explicit(
-            &mutable_error->references,
-            1,
-            memory_order_relaxed
-        );
+        atomic_fetch_add_explicit(&mutable_error->references, 1,
+                                  memory_order_relaxed);
     }
 
     return mutable_error;
@@ -73,13 +65,8 @@ void telos_error_release(const struct telos_error *error)
         return;
     }
 
-    if (
-        atomic_fetch_sub_explicit(
-            &mutable_error->references,
-            1,
-            memory_order_acq_rel
-        ) == 1
-    ) {
+    if (atomic_fetch_sub_explicit(&mutable_error->references, 1,
+                                  memory_order_acq_rel) == 1) {
         telos_error_release(mutable_error->cause);
         free(mutable_error);
     }

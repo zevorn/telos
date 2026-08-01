@@ -18,12 +18,10 @@ struct telos_event {
     struct telos_value *payload;
 };
 
-static void set_error(
-    struct telos_error **error,
-    enum telos_error_domain domain,
-    int code,
-    const char *message
-)
+static void set_error(struct telos_error **error,
+                      enum telos_error_domain domain,
+                      int code,
+                      const char *message)
 {
     if (error != NULL) {
         *error = telos_error_create(domain, code, message, NULL);
@@ -43,10 +41,8 @@ static char *copy_text(const char *text)
     return copy;
 }
 
-struct telos_event *telos_event_create(
-    const struct telos_event_spec *spec,
-    struct telos_error **error
-)
+struct telos_event *telos_event_create(const struct telos_event_spec *spec,
+                                       struct telos_error **error)
 {
     struct telos_event *event;
 
@@ -54,32 +50,18 @@ struct telos_event *telos_event_create(
         *error = NULL;
     }
 
-    if (
-        spec == NULL
-        || spec->sequence == 0
-        || spec->type == NULL
-        || spec->type[0] == '\0'
-        || spec->source == NULL
-        || spec->source[0] == '\0'
-        || spec->payload == NULL
-    ) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "event specification is invalid"
-        );
+    if (spec == NULL || spec->sequence == 0 || spec->type == NULL ||
+        spec->type[0] == '\0' || spec->source == NULL ||
+        spec->source[0] == '\0' || spec->payload == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "event specification is invalid");
         return NULL;
     }
 
     event = calloc(1, sizeof(*event));
     if (event == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "event allocation failed"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "event allocation failed");
         return NULL;
     }
 
@@ -89,12 +71,8 @@ struct telos_event *telos_event_create(
         free(event->source);
         free(event->type);
         free(event);
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "event metadata allocation failed"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "event metadata allocation failed");
         return NULL;
     }
 
@@ -114,11 +92,8 @@ struct telos_event *telos_event_retain(const struct telos_event *event)
     struct telos_event *mutable_event = (struct telos_event *)event;
 
     if (mutable_event != NULL) {
-        atomic_fetch_add_explicit(
-            &mutable_event->references,
-            1,
-            memory_order_relaxed
-        );
+        atomic_fetch_add_explicit(&mutable_event->references, 1,
+                                  memory_order_relaxed);
     }
 
     return mutable_event;
@@ -132,13 +107,8 @@ void telos_event_release(const struct telos_event *event)
         return;
     }
 
-    if (
-        atomic_fetch_sub_explicit(
-            &mutable_event->references,
-            1,
-            memory_order_acq_rel
-        ) == 1
-    ) {
+    if (atomic_fetch_sub_explicit(&mutable_event->references, 1,
+                                  memory_order_acq_rel) == 1) {
         telos_value_release(mutable_event->payload);
         free(mutable_event->source);
         free(mutable_event->type);
