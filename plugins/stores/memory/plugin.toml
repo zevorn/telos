@@ -1,0 +1,25 @@
+[plugin]
+id = "dev.zevorn.memory-store"
+name = "Memory Event Store"
+version = "0.1.0"
+abi = 1
+entry = "telos_plugin_init_v1"
+
+[runtime]
+modes = ["builtin", "inprocess", "static"]
+default = "builtin"
+
+[platform]
+targets = [
+    "linux-x86_64",
+    "linux-aarch64",
+    "linux-riscv64",
+    "zephyr-arm64",
+    "zephyr-native",
+]
+
+[build]
+system = "meson"
+
+[permissions]
+required = []

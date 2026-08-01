@@ -24,6 +24,15 @@ cc = meson.get_compiler('c')
 dl_dep = cc.find_library('dl', required: false)
 
 subdir('src')
+subdir('plugins')
+
+telos_dep = declare_dependency(
+    dependencies: [
+        telos_core_dep,
+        telos_official_plugins_dep,
+    ],
+)
+
 subdir('tools')
 subdir('sdk')
 subdir('tests')

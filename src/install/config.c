@@ -5,7 +5,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <telos/array.h>
 #include <telos/config.h>
+
+enum config_key {
+    CONFIG_AGENT_PROVIDER,
+    CONFIG_AGENT_MODEL,
+    CONFIG_STATE_DIRECTORY,
+    CONFIG_BUILDER_BACKEND,
+    CONFIG_KEY_COUNT,
+};
 
 struct config_entry {
     const char *key;
@@ -14,45 +23,33 @@ struct config_entry {
 };
 
 struct telos_config {
-    struct config_entry entries[7];
+    struct config_entry entries[CONFIG_KEY_COUNT];
 };
 
-static const char *const keys[] = {
+static const char *const keys[CONFIG_KEY_COUNT] = {
     "agent.provider",
     "agent.model",
-    "providers.openai.endpoint",
-    "providers.openai.secret",
-    "providers.openai.state_mode",
     "state.directory",
     "builder.backend",
 };
 
-static const char *const defaults[] = {
-    "dev.zevorn.openai-responses",
+static const char *const defaults[CONFIG_KEY_COUNT] = {
+    "unconfigured",
     "configured-model",
-    "https://api.openai.com/v1",
-    "secret:provider.openai",
-    "local",
     "",
     "container",
 };
 
-static const char *const environment_names[] = {
+static const char *const environment_names[CONFIG_KEY_COUNT] = {
     "TELOS_AGENT_PROVIDER",
     "TELOS_AGENT_MODEL",
-    "TELOS_OPENAI_ENDPOINT",
-    "TELOS_OPENAI_SECRET",
-    "TELOS_OPENAI_STATE_MODE",
     "TELOS_STATE_DIRECTORY",
     "TELOS_BUILDER_BACKEND",
 };
 
-static void set_error(
-    struct telos_error **error,
-    enum telos_error_domain domain,
-    int code,
-    const char *message
-)
+static void set_error(struct telos_error **error,
+                      enum telos_error_domain domain, int code,
+                      const char *message)
 {
     if (error != NULL) {
         *error = telos_error_create(domain, code, message, NULL);
@@ -72,12 +69,8 @@ static char *copy_text(const char *text)
 
 static bool is_space(char value)
 {
-    return value == ' '
-        || value == '\t'
-        || value == '\n'
-        || value == '\r'
-        || value == '\f'
-        || value == '\v';
+    return value == ' ' || value == '\t' || value == '\n' || value == '\r' ||
+           value == '\f' || value == '\v';
 }
 
 static char *trim(char *text)
@@ -108,12 +101,10 @@ static char *parse_string(char *value)
     return copy_text(value + 1);
 }
 
-static struct config_entry *find_entry(
-    struct telos_config *config,
-    const char *key
-)
+static struct config_entry *find_entry(struct telos_config *config,
+                                       const char *key)
 {
-    for (size_t index = 0; index < 7; ++index) {
+    for (size_t index = 0; index < TELOS_ARRAY_SIZE(keys); ++index) {
         if (strcmp(config->entries[index].key, key) == 0) {
             return &config->entries[index];
         }
@@ -127,15 +118,7 @@ static bool value_valid(const char *key, const char *value)
         return false;
     }
     if (strcmp(key, "builder.backend") == 0) {
-        return strcmp(value, "native") == 0
-            || strcmp(value, "container") == 0;
-    }
-    if (strcmp(key, "providers.openai.state_mode") == 0) {
-        return strcmp(value, "local") == 0
-            || strcmp(value, "remote") == 0;
-    }
-    if (strcmp(key, "providers.openai.secret") == 0) {
-        return strncmp(value, "secret:", 7) == 0 && value[7] != '\0';
+        return strcmp(value, "native") == 0 || strcmp(value, "container") == 0;
     }
     if (strcmp(key, "state.directory") == 0) {
         return value[0] == '/';
@@ -143,34 +126,22 @@ static bool value_valid(const char *key, const char *value)
     return true;
 }
 
-static bool assign(
-    struct telos_config *config,
-    const char *key,
-    const char *value,
-    enum telos_config_origin origin,
-    struct telos_error **error
-)
+static bool assign(struct telos_config *config, const char *key,
+                   const char *value, enum telos_config_origin origin,
+                   struct telos_error **error)
 {
     struct config_entry *entry = find_entry(config, key);
     char *copy;
 
     if (entry == NULL || !value_valid(key, value)) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Configuration key or value is invalid"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Configuration key or value is invalid");
         return false;
     }
     copy = copy_text(value);
     if (copy == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "Configuration value allocation failed"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Configuration value allocation failed");
         return false;
     }
     free(entry->value);
@@ -179,12 +150,9 @@ static bool assign(
     return true;
 }
 
-static bool apply_file(
-    struct telos_config *config,
-    const char *path,
-    enum telos_config_origin origin,
-    struct telos_error **error
-)
+static bool apply_file(struct telos_config *config, const char *path,
+                       enum telos_config_origin origin,
+                       struct telos_error **error)
 {
     FILE *stream = fopen(path, "rb");
     char *line = NULL;
@@ -196,12 +164,8 @@ static bool apply_file(
         return true;
     }
     if (stream == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_IO,
-            errno,
-            "Configuration file could not be opened"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Configuration file could not be opened");
         return false;
     }
     while (getline(&line, &capacity, stream) >= 0) {
@@ -216,11 +180,8 @@ static bool apply_file(
         if (clean[0] == '[') {
             size_t size = strlen(clean);
 
-            if (
-                size < 3
-                || clean[size - 1] != ']'
-                || size - 2 >= sizeof(section)
-            ) {
+            if (size < 3 || clean[size - 1] != ']' ||
+                size - 2 >= sizeof(section)) {
                 valid = false;
                 break;
             }
@@ -235,10 +196,8 @@ static bool apply_file(
         }
         *separator = '\0';
         clean = trim(clean);
-        if (
-            snprintf(key, sizeof(key), "%s.%s", section, clean)
-            >= (int)sizeof(key)
-        ) {
+        if (snprintf(key, sizeof(key), "%s.%s", section, clean) >=
+            (int)sizeof(key)) {
             valid = false;
             break;
         }
@@ -259,21 +218,15 @@ static bool apply_file(
     free(line);
     fclose(stream);
     if (!valid && (error == NULL || *error == NULL)) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Configuration file is invalid"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Configuration file is invalid");
     }
     return valid;
 }
 
-struct telos_config *telos_config_load(
-    const char *home_directory,
-    const char *project_directory,
-    struct telos_error **error
-)
+struct telos_config *telos_config_load(const char *home_directory,
+                                       const char *project_directory,
+                                       struct telos_error **error)
 {
     struct telos_config *config;
     char state_directory[4096];
@@ -283,85 +236,47 @@ struct telos_config *telos_config_load(
     if (error != NULL) {
         *error = NULL;
     }
-    if (
-        home_directory == NULL
-        || home_directory[0] != '/'
-        || project_directory == NULL
-        || project_directory[0] != '/'
-        || snprintf(
-            state_directory,
-            sizeof(state_directory),
-            "%s/.telos",
-            home_directory
-        ) >= (int)sizeof(state_directory)
-        || snprintf(
-            user_path,
-            sizeof(user_path),
-            "%s/.telos/config.toml",
-            home_directory
-        ) >= (int)sizeof(user_path)
-        || snprintf(
-            project_path,
-            sizeof(project_path),
-            "%s/telos.toml",
-            project_directory
-        ) >= (int)sizeof(project_path)
-    ) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Home and project directories must be absolute"
-        );
+    if (home_directory == NULL || home_directory[0] != '/' ||
+        project_directory == NULL || project_directory[0] != '/' ||
+        snprintf(state_directory, sizeof(state_directory), "%s/.telos",
+                 home_directory) >= (int)sizeof(state_directory) ||
+        snprintf(user_path, sizeof(user_path), "%s/.telos/config.toml",
+                 home_directory) >= (int)sizeof(user_path) ||
+        snprintf(project_path, sizeof(project_path), "%s/telos.toml",
+                 project_directory) >= (int)sizeof(project_path)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Home and project directories must be absolute");
         return NULL;
     }
     config = calloc(1, sizeof(*config));
     if (config == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_MEMORY,
-            ENOMEM,
-            "Configuration allocation failed"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Configuration allocation failed");
         return NULL;
     }
-    for (size_t index = 0; index < 7; ++index) {
+    for (size_t index = 0; index < TELOS_ARRAY_SIZE(keys); ++index) {
         config->entries[index].key = keys[index];
-        config->entries[index].value = copy_text(
-            index == 5 ? state_directory : defaults[index]
-        );
+        config->entries[index].value =
+            copy_text(index == CONFIG_STATE_DIRECTORY ? state_directory
+                                                      : defaults[index]);
         config->entries[index].origin = TELOS_CONFIG_DEFAULT;
         if (config->entries[index].value == NULL) {
             telos_config_destroy(config);
-            set_error(
-                error,
-                TELOS_ERROR_DOMAIN_MEMORY,
-                ENOMEM,
-                "Configuration default allocation failed"
-            );
+            set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                      "Configuration default allocation failed");
             return NULL;
         }
     }
-    if (
-        !apply_file(config, user_path, TELOS_CONFIG_USER, error)
-        || !apply_file(config, project_path, TELOS_CONFIG_PROJECT, error)
-    ) {
+    if (!apply_file(config, user_path, TELOS_CONFIG_USER, error) ||
+        !apply_file(config, project_path, TELOS_CONFIG_PROJECT, error)) {
         telos_config_destroy(config);
         return NULL;
     }
-    for (size_t index = 0; index < 7; ++index) {
+    for (size_t index = 0; index < TELOS_ARRAY_SIZE(keys); ++index) {
         const char *value = getenv(environment_names[index]);
 
-        if (
-            value != NULL
-            && !assign(
-                config,
-                keys[index],
-                value,
-                TELOS_CONFIG_ENVIRONMENT,
-                error
-            )
-        ) {
+        if (value != NULL && !assign(config, keys[index], value,
+                                     TELOS_CONFIG_ENVIRONMENT, error)) {
             telos_config_destroy(config);
             return NULL;
         }
@@ -374,44 +289,27 @@ void telos_config_destroy(struct telos_config *config)
     if (config == NULL) {
         return;
     }
-    for (size_t index = 0; index < 7; ++index) {
+    for (size_t index = 0; index < TELOS_ARRAY_SIZE(keys); ++index) {
         free(config->entries[index].value);
     }
     free(config);
 }
 
-bool telos_config_override(
-    struct telos_config *config,
-    const char *key,
-    const char *value,
-    struct telos_error **error
-)
+bool telos_config_override(struct telos_config *config, const char *key,
+                           const char *value, struct telos_error **error)
 {
     if (error != NULL) {
         *error = NULL;
     }
     if (config == NULL || key == NULL || value == NULL) {
-        set_error(
-            error,
-            TELOS_ERROR_DOMAIN_ARGUMENT,
-            EINVAL,
-            "Configuration override arguments are invalid"
-        );
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Configuration override arguments are invalid");
         return false;
     }
-    return assign(
-        config,
-        key,
-        value,
-        TELOS_CONFIG_COMMAND_LINE,
-        error
-    );
+    return assign(config, key, value, TELOS_CONFIG_COMMAND_LINE, error);
 }
 
-const char *telos_config_get(
-    const struct telos_config *config,
-    const char *key
-)
+const char *telos_config_get(const struct telos_config *config, const char *key)
 {
     struct config_entry *entry;
 
@@ -422,10 +320,8 @@ const char *telos_config_get(
     return entry == NULL ? NULL : entry->value;
 }
 
-enum telos_config_origin telos_config_get_origin(
-    const struct telos_config *config,
-    const char *key
-)
+enum telos_config_origin
+telos_config_get_origin(const struct telos_config *config, const char *key)
 {
     struct config_entry *entry;
 

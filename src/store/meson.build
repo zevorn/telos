@@ -1,11 +1,6 @@
 telos_store = static_library(
     'telos-store',
-    [
-        'markdown.c',
-        'memory.c',
-        'ring.c',
-        'store.c',
-    ],
+    'store.c',
     dependencies: telos_base_dep,
     include_directories: inc_public,
 )

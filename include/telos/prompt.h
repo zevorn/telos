@@ -1,14 +1,9 @@
 #ifndef TELOS_PROMPT_H
 #define TELOS_PROMPT_H
 
-#include <stdbool.h>
-#include <stddef.h>
+#include <telos/types.h>
 
 #include <telos/error.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 enum telos_prompt_slot {
     TELOS_PROMPT_POLICY = 1,
@@ -40,40 +35,21 @@ struct telos_prompt_fragment {
 };
 
 struct telos_prompt_snapshot;
+typedef struct telos_prompt_snapshot telos_prompt_snapshot;
 
-struct telos_prompt_snapshot *telos_prompt_snapshot_create(
-    const struct telos_prompt_fragment *fragments,
-    size_t fragment_count,
-    struct telos_error **error
-);
+telos_prompt_snapshot *
+telos_prompt_snapshot_create(const struct telos_prompt_fragment *fragments,
+                             size_t fragment_count,
+                             struct telos_error **error);
 
-struct telos_prompt_snapshot *telos_prompt_snapshot_retain(
-    const struct telos_prompt_snapshot *snapshot
-);
+telos_prompt_snapshot *
+telos_prompt_snapshot_retain(const telos_prompt_snapshot *snapshot);
 
-void telos_prompt_snapshot_release(
-    const struct telos_prompt_snapshot *snapshot
-);
+void telos_prompt_snapshot_release(const telos_prompt_snapshot *snapshot);
 
-const char *telos_prompt_snapshot_content(
-    const struct telos_prompt_snapshot *snapshot
-);
+const char *
+telos_prompt_snapshot_content(const telos_prompt_snapshot *snapshot);
 
 const char *telos_prompt_kernel_contract(void);
-
-bool telos_guidance_discover(
-    const char *telos_home,
-    const char *project_root,
-    const char *current_directory,
-    char **user_guidance,
-    char **project_guidance,
-    struct telos_error **error
-);
-
-void telos_prompt_string_free(char *value);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

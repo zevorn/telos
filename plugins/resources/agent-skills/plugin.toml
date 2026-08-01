@@ -1,0 +1,25 @@
+[plugin]
+id = "dev.zevorn.agent-skills"
+name = "Agent Skills Resource Source"
+version = "0.1.0"
+abi = 1
+entry = "telos_plugin_init_v1"
+
+[runtime]
+modes = ["builtin", "inprocess", "process"]
+default = "builtin"
+
+[platform]
+targets = [
+    "linux-x86_64",
+    "linux-aarch64",
+    "linux-riscv64",
+]
+
+[build]
+system = "meson"
+
+[permissions]
+required = [
+    "filesystem.read",
+]

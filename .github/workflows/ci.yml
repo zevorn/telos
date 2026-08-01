@@ -39,7 +39,7 @@ jobs:
               run: meson test -C build --print-errorlogs
             - name: Check acceptance traceability
               run: |
-                  python tools/check_acceptance.py \
+                  python tests/check_acceptance.py \
                       tests/acceptance.toml \
                       build \
                       --test-log build/meson-logs/testlog.json
@@ -86,7 +86,7 @@ jobs:
                   sudo apt-get update
                   sudo apt-get install -y gcc ninja-build pkg-config
             - name: Check coverage
-              run: tools/check_coverage.sh build-coverage
+              run: tests/check_coverage.sh build-coverage
 
     provider-smoke-contract:
         name: Credentialed Provider smoke build contract
@@ -110,7 +110,7 @@ jobs:
                       -Dtests=false \
                       -Dopenai_smoke=true
                   meson compile -C build-smoke
-                  build-smoke/tools/telos-openai-smoke --help
+                  build-smoke/tests/telos-openai-smoke --help
 
     zephyr:
         name: Zephyr 4.4 scenarios
@@ -139,7 +139,7 @@ jobs:
                       telos/samples/telos_agent \
                       -- \
                       -DZEPHYR_EXTRA_MODULES="$GITHUB_WORKSPACE/telos/platforms/zephyr"
-                  telos/tools/run_zephyr_native.sh build-zephyr-native
+                  telos/tests/functional/run_zephyr_native.sh build-zephyr-native
             - name: Build and run ARM Virt
               run: |
                   west build -p always \
@@ -148,4 +148,4 @@ jobs:
                       telos/samples/telos_agent \
                       -- \
                       -DZEPHYR_EXTRA_MODULES="$GITHUB_WORKSPACE/telos/platforms/zephyr"
-                  telos/tools/run_zephyr_qemu.sh build-zephyr-qemu
+                  telos/tests/functional/run_zephyr_qemu.sh build-zephyr-qemu

@@ -19,7 +19,7 @@ tests = ["memory-store", "ring-store", "store-invalid", "markdown-store", "markd
 external = []
 
 [criteria.AC-5]
-tests = ["registry-atomic", "registry-invalid", "plugin-lifecycle", "plugin-rolling-generation", "plugin-loader-invalid"]
+tests = ["registry-atomic", "registry-invalid", "plugin-lifecycle", "plugin-rolling-generation", "plugin-loader-invalid", "official-plugins"]
 external = []
 
 [criteria.AC-6]

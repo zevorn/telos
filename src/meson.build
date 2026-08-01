@@ -13,7 +13,7 @@ subdir('security')
 subdir('agent')
 subdir('install')
 
-telos_dep = declare_dependency(
+telos_core_dep = declare_dependency(
     dependencies: [
         telos_base_dep,
         telos_state_dep,

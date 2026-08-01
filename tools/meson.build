@@ -24,14 +24,3 @@ telos_build = executable(
     'telos-build/main.c',
     install: true,
 )
-
-if get_option('openai_smoke')
-    curl_dep = dependency('libcurl', required: true)
-
-    executable(
-        'telos-openai-smoke',
-        'telos-openai-smoke/main.c',
-        dependencies: [telos_dep, curl_dep],
-        install: true,
-    )
-endif
