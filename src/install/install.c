@@ -3,6 +3,9 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#if defined(TELOS_HAVE_NSGETENVIRON)
+#include <crt_externs.h>
+#endif
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -98,6 +101,17 @@ static void progress(const struct telos_install_options *options,
     if (options->progress != NULL) {
         options->progress(state, options->progress_context);
     }
+}
+
+static void clear_process_environment(void)
+{
+#if defined(TELOS_HAVE_NSGETENVIRON)
+    static char *empty_environment[] = {NULL};
+
+    *_NSGetEnviron() = empty_environment;
+#else
+    clearenv();
+#endif
 }
 
 static bool path_join(char *output,
@@ -220,7 +234,7 @@ static bool run_process(const char *working_directory,
         }
         close(null_descriptor);
         close(log_descriptor);
-        clearenv();
+        clear_process_environment();
         setenv("PATH", host_path == NULL ? "/usr/bin:/bin" : host_path, 1);
         setenv("HOME", "/nonexistent", 1);
         setenv("LC_ALL", "C", 1);
@@ -405,8 +419,9 @@ static bool write_build_inputs(const char *source_directory,
         return false;
     }
     if (fprintf(stream,
-                "telos_sdk=0.1.0\nabi=1\ntarget=linux-x86_64\n"
+                "telos_sdk=0.1.0\nabi=1\ntarget=%s\n"
                 "builder=%u\npkgconfig=%s\n",
+                TELOS_INSTALL_TARGET,
                 (unsigned int)options->builder,
                 options->sdk_pkgconfig_path) < 0 ||
         fclose(stream) != 0) {
@@ -415,6 +430,14 @@ static bool write_build_inputs(const char *source_directory,
         return false;
     }
     return true;
+}
+
+static bool shared_module_name(const char *name)
+{
+    size_t size = strlen(name);
+
+    return (size > 3 && strcmp(name + size - 3, ".so") == 0) ||
+           (size > 6 && strcmp(name + size - 6, ".dylib") == 0);
 }
 
 static bool find_artifact_recursive(const char *directory_path,
@@ -430,7 +453,6 @@ static bool find_artifact_recursive(const char *directory_path,
     while ((entry = readdir(directory)) != NULL) {
         char child[PATH_BUFFER_SIZE];
         struct stat status;
-        size_t name_size;
 
         if (strcmp(entry->d_name, ".") == 0 ||
             strcmp(entry->d_name, "..") == 0 ||
@@ -443,9 +465,7 @@ static bool find_artifact_recursive(const char *directory_path,
             closedir(directory);
             return true;
         }
-        name_size = strlen(entry->d_name);
-        if (S_ISREG(status.st_mode) && name_size > 3 &&
-            strcmp(entry->d_name + name_size - 3, ".so") == 0 &&
+        if (S_ISREG(status.st_mode) && shared_module_name(entry->d_name) &&
             strlen(child) + 1 <= artifact_size) {
             memcpy(artifact, child, strlen(child) + 1);
             closedir(directory);

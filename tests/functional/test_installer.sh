@@ -33,11 +33,19 @@ printf '%s\n' 'this is not valid C' \
     >>"$temporary/bad-plugin/src/plugin.c"
 printf '%s\n' "test('intentional-failure', find_program('false'))" \
     >>"$temporary/bad-test-plugin/meson.build"
-sed -i \
+sed \
     's/telos_plugin_init_v1/not_telos_plugin_init_v1/' \
+    "$temporary/bad-abi-plugin/src/plugin.c" \
+    >"$temporary/bad-abi-plugin/src/plugin.c.new"
+mv \
+    "$temporary/bad-abi-plugin/src/plugin.c.new" \
     "$temporary/bad-abi-plugin/src/plugin.c"
-sed -i \
+sed \
     's/? 0 : 1;/? 1 : 1;/' \
+    "$temporary/bad-health-plugin/src/plugin.c" \
+    >"$temporary/bad-health-plugin/src/plugin.c.new"
+mv \
+    "$temporary/bad-health-plugin/src/plugin.c.new" \
     "$temporary/bad-health-plugin/src/plugin.c"
 printf '%s\n' \
     "run_command('sh', '-c', 'sleep 3', check: true)" \

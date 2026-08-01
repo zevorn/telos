@@ -84,15 +84,24 @@ foreach entry : unit_tests
     test(entry[0], unit_test, suite: 'unit')
 endforeach
 
-test_allocation_failures = executable(
-    'test-allocation-failures',
-    'test_allocation_failures.c',
-    dependencies: telos_dep,
-    link_args: [
+allocation_failure_link_args = []
+allocation_failure_c_args = []
+if host_machine.system() == 'linux'
+    allocation_failure_link_args += [
         '-Wl,--wrap=malloc',
         '-Wl,--wrap=calloc',
         '-Wl,--wrap=realloc',
-    ],
+    ]
+elif host_machine.system() == 'darwin'
+    allocation_failure_c_args += '-DTELOS_TEST_MALLOC_ZONES=1'
+endif
+
+test_allocation_failures = executable(
+    'test-allocation-failures',
+    'test_allocation_failures.c',
+    c_args: allocation_failure_c_args,
+    dependencies: telos_dep,
+    link_args: allocation_failure_link_args,
 )
 
 test(

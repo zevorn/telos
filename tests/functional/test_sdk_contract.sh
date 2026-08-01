@@ -20,7 +20,10 @@ PKG_CONFIG_SYSROOT_DIR="$temporary/stage" \
 meson setup "$temporary/build" "$temporary/plugin" --wrap-mode=nodownload >/dev/null
 meson compile -C "$temporary/build" >/dev/null
 
-plugin=$(find "$temporary/build" -name 'telos-echo-tool.so' -print -quit)
+plugin=$(find "$temporary/build" \
+    \( -name 'telos-echo-tool.so' -o -name 'telos-echo-tool.dylib' \) \
+    -print \
+    -quit)
 if [ -z "$plugin" ]; then
     echo "SDK template did not produce a Plugin module" >&2
     exit 1

@@ -18,6 +18,10 @@ if get_option('plugin_abi') != 1
     error('Telos v0.1 supports Plugin ABI version 1 only')
 endif
 
+if host_machine.system() == 'darwin'
+    add_project_arguments('-D_DARWIN_C_SOURCE=1', language: 'c')
+endif
+
 inc_public = include_directories('include')
 thread_dep = dependency('threads')
 cc = meson.get_compiler('c')

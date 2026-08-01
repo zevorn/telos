@@ -1,6 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <assert.h>
+#if defined(TELOS_TEST_MALLOC_ZONES)
+#include <malloc/malloc.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,9 +27,11 @@ static size_t allocation_to_fail;
 static bool allocation_failure_enabled;
 static bool allocation_failed;
 
+#if !defined(TELOS_TEST_MALLOC_ZONES)
 void *__real_malloc(size_t size);
 void *__real_calloc(size_t count, size_t size);
 void *__real_realloc(void *allocation, size_t size);
+#endif
 
 static bool should_fail(void)
 {
@@ -41,6 +46,31 @@ static bool should_fail(void)
     return false;
 }
 
+#if defined(TELOS_TEST_MALLOC_ZONES)
+void *malloc(size_t size)
+{
+    if (should_fail()) {
+        return NULL;
+    }
+    return malloc_zone_malloc(malloc_default_zone(), size);
+}
+
+void *calloc(size_t count, size_t size)
+{
+    if (should_fail()) {
+        return NULL;
+    }
+    return malloc_zone_calloc(malloc_default_zone(), count, size);
+}
+
+void *realloc(void *allocation, size_t size)
+{
+    if (should_fail()) {
+        return NULL;
+    }
+    return malloc_zone_realloc(malloc_default_zone(), allocation, size);
+}
+#else
 void *__wrap_malloc(size_t size)
 {
     return should_fail() ? NULL : __real_malloc(size);
@@ -55,6 +85,7 @@ void *__wrap_realloc(void *allocation, size_t size)
 {
     return should_fail() ? NULL : __real_realloc(allocation, size);
 }
+#endif
 
 typedef bool (*operation_fn)(void *context);
 

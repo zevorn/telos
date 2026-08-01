@@ -187,7 +187,7 @@ static bool response_ready(struct telos_plugin_process *process,
             }
             if (available >= 4) {
                 ssize_t peeked = recv(process->output, length, sizeof(length),
-                                      MSG_PEEK | MSG_DONTWAIT);
+                                      MSG_PEEK);
                 uint32_t payload_size;
 
                 if (peeked < 0 && errno != EINTR && errno != EAGAIN &&
