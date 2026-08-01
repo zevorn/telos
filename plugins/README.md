@@ -8,14 +8,14 @@ released under the same rules as the Plugins maintained by the core team.
 
 | Plugin | Kind | Platforms |
 | --- | --- | --- |
-| [OpenAI Responses](providers/openai-responses/README.md) | Provider | Linux and Zephyr |
-| [Memory Store](stores/memory/README.md) | Store | Linux and Zephyr |
-| [Ring Store](stores/ring/README.md) | Store | Linux and Zephyr |
-| [Markdown Store](stores/markdown/README.md) | Store | Linux and Zephyr with a filesystem |
-| [Agent Skills](resources/agent-skills/README.md) | Context Source | Linux |
-| [Project Guidance](context-sources/project-guidance/README.md) | Context Source | Linux |
-| [Terminal Frontend](frontends/terminal/README.md) | Frontend | Linux |
-| [curl Transport](transports/curl/README.md) | Transport | Linux |
+| [OpenAI Responses](providers/openai-responses/README.md) | Provider | Linux, macOS, and Zephyr |
+| [Memory Store](stores/memory/README.md) | Store | Linux, macOS, and Zephyr |
+| [Ring Store](stores/ring/README.md) | Store | Linux, macOS, and Zephyr |
+| [Markdown Store](stores/markdown/README.md) | Store | Linux, macOS, and Zephyr with a filesystem |
+| [Agent Skills](resources/agent-skills/README.md) | Context Source | Linux and macOS |
+| [Project Guidance](context-sources/project-guidance/README.md) | Context Source | Linux and macOS |
+| [Terminal Frontend](frontends/terminal/README.md) | Frontend | Linux and macOS |
+| [curl Transport](transports/curl/README.md) | Transport | Linux and macOS |
 
 ## Plugin-first rule
 

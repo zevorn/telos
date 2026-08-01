@@ -1,9 +1,9 @@
-# Linux terminal Agent
+# Terminal Agent on Linux and macOS
 
-Telos provides a main-screen terminal Agent for Linux. Completed messages stay
-in normal terminal scrollback; only the live response, editor, and footer are
-redrawn. This preserves shell history and avoids a full-screen ncurses
-dependency.
+Telos provides a main-screen terminal Agent for Linux and macOS. Completed
+messages stay in normal terminal scrollback; only the live response, editor,
+and footer are redrawn. This preserves shell history and avoids a full-screen
+ncurses dependency.
 
 ## Build
 
@@ -18,7 +18,7 @@ meson test -C build --print-errorlogs
 ```
 
 `-Dcurl_transport=enabled` makes configuration fail early when libcurl is
-missing. The default `auto` mode keeps non-Linux and minimal builds usable by
+missing. The default `auto` mode keeps minimal and Zephyr builds usable by
 omitting the Transport when the dependency is unavailable.
 
 ## Start an interactive session
@@ -115,7 +115,7 @@ terminal, the Frontend automatically uses a plain line-oriented format.
 
 ## Resource bounds
 
-The Linux Frontend makes one bounded session allocation. Input and recalled
+The terminal Frontend makes one bounded session allocation. Input and recalled
 prompts are each limited to 16 KiB. Its worker-to-renderer queue has 64 fixed
 entries with 2 KiB text fragments, and the partial output buffer is 8 KiB.
 The CLI retains at most 64 conversation messages and 4 MiB of message text;

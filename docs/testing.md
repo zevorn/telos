@@ -25,7 +25,7 @@ details.
 `tests/` is the only test-case tree and `tests/meson.build` is the only Meson
 test registration entry. Tests are assigned to exactly one suite:
 
-- `unit` covers focused Core and Linux platform behavior;
+- `unit` covers focused Core and host platform behavior;
 - `plugins` covers the Plugin ABI, lifecycle, loading, installation, and every
   official Plugin implementation;
 - `functional` covers CLI and build contracts plus complete Linux and Zephyr
@@ -93,6 +93,22 @@ When libcurl is available, `terminal-frontend`, `terminal-tui`,
 `curl-transport`, and `agent-chat` cover plain pipes, a real pseudoterminal,
 cancellation validation, and an end-to-end local streaming Responses request.
 No model credential is used by these tests.
+
+## macOS development host
+
+Use Apple Clang and ensure pkg-config can resolve libcurl, then run the same
+unit, Plugin, and functional suites:
+
+```sh
+pkg-config --modversion libcurl
+meson setup build -Dcurl_transport=enabled
+meson compile -C build
+meson test -C build --print-errorlogs
+```
+
+For an existing build directory, replace `meson setup build` with
+`meson setup --reconfigure build`. The allocation-failure test uses Darwin's
+malloc zones because Apple ld does not implement GNU ld's `--wrap` option.
 
 ## Zephyr
 

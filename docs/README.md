@@ -1,8 +1,8 @@
 # Telos documentation
 
-Telos is a self-extensible agent runtime for Linux and Zephyr. The runtime
-owns execution invariants; concrete providers, stores, tools, policies, and
-other replaceable behavior belong in Plugins.
+Telos is a self-extensible agent runtime for Linux, macOS, and Zephyr. The
+runtime owns execution invariants; concrete providers, stores, tools, policies,
+and other replaceable behavior belong in Plugins.
 
 This document describes the repository as it is built today. Verification
 commands and platform-specific test details live in [testing.md](testing.md),
@@ -11,8 +11,9 @@ and the upstream Plugin catalog and contribution rules live in
 
 ## Build Telos
 
-Telos requires a C17 compiler, Meson 1.4 or newer, Ninja, and pkg-config. The
-default Linux host profile also requires libcurl development headers.
+Telos requires a C17 compiler, Meson 1.4 or newer, Ninja, and pkg-config. An
+interactive Linux or macOS host build also requires libcurl development
+headers.
 
 ```sh
 meson setup build
@@ -28,7 +29,8 @@ build/tools/telos doctor
 build/tools/telos plugin list
 ```
 
-On Linux, a build with libcurl also provides the interactive terminal Agent:
+On Linux and macOS, a build with libcurl also provides the interactive
+terminal Agent:
 
 ```sh
 TELOS_AGENT_MODEL='your-responses-model' \
@@ -62,7 +64,7 @@ Applications and frontends
        |         |
  Platform integration
             |
-      Linux / Zephyr
+ Linux / macOS / Zephyr
 ```
 
 ### Core
@@ -97,10 +99,10 @@ The repository currently ships these Plugins:
 | `dev.zevorn.memory-store` | Store | Keeps an unbounded Event sequence in memory. |
 | `dev.zevorn.ring-store` | Store | Keeps a fixed-capacity Event window. |
 | `dev.zevorn.markdown-store` | Store | Persists append-only, human-readable Event records. |
-| `dev.zevorn.agent-skills` | Context Source | Discovers and validates filesystem-backed Agent Skills on Linux. |
-| `dev.zevorn.project-guidance` | Context Source | Loads ordered user and project guidance on Linux. |
-| `dev.zevorn.terminal-frontend` | Frontend | Provides bounded main-screen terminal interaction on Linux. |
-| `dev.zevorn.curl-transport` | Transport | Streams cancellable HTTP responses through libcurl on Linux. |
+| `dev.zevorn.agent-skills` | Context Source | Discovers and validates filesystem-backed Agent Skills on POSIX hosts. |
+| `dev.zevorn.project-guidance` | Context Source | Loads ordered user and project guidance on POSIX hosts. |
+| `dev.zevorn.terminal-frontend` | Frontend | Provides bounded main-screen terminal interaction on Linux and macOS. |
+| `dev.zevorn.curl-transport` | Transport | Streams cancellable HTTP responses through libcurl on Linux and macOS. |
 
 Official Plugins are built and tested with the repository. When shared Plugin
 support is enabled, Meson also produces loadable modules with the versioned
@@ -335,7 +337,7 @@ Provider ID, state directory, and builder backend. Provider-specific keys,
 defaults, environment variables, and validation belong to the Provider Plugin
 that consumes them.
 
-The Linux terminal composition currently reads `agent.provider`,
+The host terminal composition currently reads `agent.provider`,
 `agent.model`, and `agent.endpoint`. Their environment equivalents are
 `TELOS_AGENT_PROVIDER`, `TELOS_AGENT_MODEL`, and `TELOS_AGENT_ENDPOINT`;
 `--provider`, `--model`, and `--endpoint` provide one-process overrides.
@@ -367,7 +369,7 @@ New replaceable behavior starts in `plugins/`. A Core change is justified only
 when the shared interface or a global invariant must change to support that
 behavior.
 
-## Linux and Zephyr
+## Host systems and Zephyr
 
 Linux uses the top-level Meson build and the thin adapter under
 `platforms/linux/`. The adapter exposes the canonical Plugin target and host
@@ -375,6 +377,10 @@ resource facts through caller-owned storage as `telos_linux_platform_dep`;
 `telos_dep` includes it on Linux. Zephyr retains its upstream CMake build only
 as a thin integration layer for Kconfig, Devicetree, board selection, source
 attachment, and final firmware linking.
+
+macOS uses the same top-level Meson host build. It compiles the portable Core,
+Plugin SDK, CLI, process host, and POSIX terminal and curl Plugins without
+adding platform behavior to Core. The Linux adapter remains Linux-specific.
 
 Supported verification targets are:
 
