@@ -9,6 +9,42 @@ struct provider_fixture {
     size_t dispatches;
 };
 
+struct observer_fixture {
+    size_t provider_events;
+    size_t tools_started;
+    size_t tools_completed;
+};
+
+static bool observe(const struct telos_agent_event *event,
+                    void *context,
+                    struct telos_error **error)
+{
+    struct observer_fixture *fixture = context;
+
+    (void)error;
+    assert(event != NULL);
+    assert(event->provider_round == 1 || event->provider_round == 2);
+    if (event->kind == TELOS_AGENT_PROVIDER_EVENT) {
+        assert(event->provider_event != NULL);
+        fixture->provider_events += 1;
+    } else if (event->kind == TELOS_AGENT_TOOL_STARTED) {
+        assert(strcmp(event->tool_name, "dev.zevorn.echo") == 0);
+        assert(strcmp(event->tool_call_id, "call-1") == 0 ||
+               strcmp(event->tool_call_id, "call-2") == 0);
+        fixture->tools_started += 1;
+    } else if (event->kind == TELOS_AGENT_TOOL_COMPLETED) {
+        assert(strcmp(event->tool_name, "dev.zevorn.echo") == 0);
+        assert(strcmp(event->tool_call_id, "call-1") == 0 ||
+               strcmp(event->tool_call_id, "call-2") == 0);
+        assert(event->tool_result != NULL);
+        assert(event->tool_error == NULL);
+        fixture->tools_completed += 1;
+    } else {
+        abort();
+    }
+    return true;
+}
+
 static void assert_string_field(const struct telos_value *object,
                                 const char *key,
                                 const char *expected)
@@ -131,6 +167,7 @@ int main(void)
     struct telos_capability_broker *broker =
         telos_capability_broker_create(NULL, 0, allow, NULL, NULL);
     struct provider_fixture fixture = {0};
+    struct observer_fixture observer = {0};
     struct telos_agent_options options;
     struct telos_value *role = telos_value_new_string("user");
     struct telos_value *content = telos_value_new_string("use echo");
@@ -161,6 +198,8 @@ int main(void)
         .capability_broker = broker,
         .dispatch = dispatch,
         .provider_context = &fixture,
+        .observe = observe,
+        .observe_context = &observer,
         .maximum_provider_rounds = 4,
     };
 
@@ -169,6 +208,9 @@ int main(void)
     assert(strcmp(result.text, "both tools completed") == 0);
     assert(result.provider_rounds == 2);
     assert(result.tool_calls == 2);
+    assert(observer.provider_events == 5);
+    assert(observer.tools_started == 2);
+    assert(observer.tools_completed == 2);
 
     telos_agent_result_clear(&result);
     telos_value_release(provider_options);

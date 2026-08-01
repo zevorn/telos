@@ -3,6 +3,7 @@
 
 #include <telos/types.h>
 
+#include <telos/cancel.h>
 #include <telos/error.h>
 #include <telos/value.h>
 
@@ -18,6 +19,7 @@ struct telos_provider_request {
     const struct telos_value *options;
     enum telos_provider_state_mode state_mode;
     const char *previous_response_id;
+    const struct telos_cancel *cancel;
 };
 
 typedef struct telos_provider_request telos_provider_request;

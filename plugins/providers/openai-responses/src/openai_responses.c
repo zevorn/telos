@@ -907,6 +907,7 @@ telos_openai_provider_dispatch(const telos_provider_request *request,
             .bearer_token = telos_secret_material_data(secret),
             .body = body,
             .body_size = body_size - 1,
+            .cancel = request->cancel,
         };
 
         if (!provider->send(&transport_request, receive_sse, parser,

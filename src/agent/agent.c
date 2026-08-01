@@ -24,6 +24,13 @@ struct response_collector {
     bool completed;
 };
 
+struct collector_context {
+    struct response_collector *collector;
+    const struct telos_agent_options *options;
+    size_t provider_round;
+    size_t maximum_response_bytes;
+};
+
 struct tool_worker {
     const struct telos_agent_options *options;
     const struct telos_cancel *cancel;
@@ -83,17 +90,14 @@ static void collector_clear(struct response_collector *collector)
     memset(collector, 0, sizeof(*collector));
 }
 
-static bool append_text(struct response_collector *collector, const char *delta)
+static bool append_text(struct response_collector *collector, const char *delta,
+                        size_t delta_size, size_t maximum_size)
 {
-    size_t delta_size;
     size_t next_size;
     char *next;
 
-    if (delta == NULL) {
-        return false;
-    }
-    delta_size = strlen(delta);
-    if (delta_size > SIZE_MAX - collector->text_size - 1) {
+    if (delta_size > SIZE_MAX - collector->text_size - 1 ||
+        delta_size > maximum_size - collector->text_size) {
         return false;
     }
     next_size = collector->text_size + delta_size;
@@ -157,12 +161,37 @@ static bool collect_event(const struct telos_provider_event *event,
                           void *context,
                           struct telos_error **error)
 {
-    struct response_collector *collector = context;
+    struct collector_context *collector_context = context;
+    struct response_collector *collector;
+    const struct telos_agent_options *options;
+
+    if (collector_context == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Agent Event collector context is invalid");
+        return false;
+    }
+    collector = collector_context->collector;
+    options = collector_context->options;
 
     if (event == NULL || collector == NULL || collector->completed) {
         set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
                   "Provider emitted an invalid or late Event");
         return false;
+    }
+    if (options->observe != NULL) {
+        const struct telos_agent_event observed = {
+            .kind = TELOS_AGENT_PROVIDER_EVENT,
+            .provider_round = collector_context->provider_round,
+            .provider_event = event,
+        };
+
+        if (!options->observe(&observed, options->observe_context, error)) {
+            if (error == NULL || *error == NULL) {
+                set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                          "Agent Event observer failed");
+            }
+            return false;
+        }
     }
     switch (event->kind) {
     case TELOS_PROVIDER_RESPONSE_STARTED:
@@ -179,13 +208,30 @@ static bool collect_event(const struct telos_provider_event *event,
         set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
                   "Provider response identifier could not be collected");
         return false;
-    case TELOS_PROVIDER_TEXT_DELTA:
-        if (append_text(collector, event->delta)) {
+    case TELOS_PROVIDER_TEXT_DELTA: {
+        size_t delta_size;
+
+        if (event->delta == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                      "Provider text could not be collected");
+            return false;
+        }
+        delta_size = strlen(event->delta);
+        if (delta_size >
+            collector_context->maximum_response_bytes -
+                collector->text_size) {
+            set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EFBIG,
+                      "Provider text exceeded the Agent response limit");
+            return false;
+        }
+        if (append_text(collector, event->delta, delta_size,
+                        collector_context->maximum_response_bytes)) {
             return true;
         }
         set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
                   "Provider text could not be collected");
         return false;
+    }
     case TELOS_PROVIDER_TOOL_CALL_COMPLETED:
         if (add_call(collector, event)) {
             return true;
@@ -225,6 +271,7 @@ static void *execute_tool(void *context)
 static bool run_tools(const struct telos_agent_options *options,
                       const struct telos_cancel *cancel,
                       struct response_collector *collector,
+                      size_t provider_round,
                       struct telos_error **error)
 {
     pthread_t *threads;
@@ -233,6 +280,24 @@ static bool run_tools(const struct telos_agent_options *options,
 
     if (collector->call_count == 0) {
         return true;
+    }
+    if (options->observe != NULL) {
+        for (size_t index = 0; index < collector->call_count; ++index) {
+            const struct telos_agent_event event = {
+                .kind = TELOS_AGENT_TOOL_STARTED,
+                .provider_round = provider_round,
+                .tool_call_id = collector->calls[index].call_id,
+                .tool_name = collector->calls[index].name,
+            };
+
+            if (!options->observe(&event, options->observe_context, error)) {
+                if (error == NULL || *error == NULL) {
+                    set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                              "Agent Event observer failed");
+                }
+                return false;
+            }
+        }
     }
     if (collector->call_count > SIZE_MAX / sizeof(*threads)) {
         set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
@@ -271,6 +336,28 @@ static bool run_tools(const struct telos_agent_options *options,
     }
     if (result) {
         for (size_t index = 0; index < collector->call_count; ++index) {
+            if (options->observe != NULL) {
+                const struct telos_agent_event event = {
+                    .kind = collector->calls[index].error == NULL
+                                ? TELOS_AGENT_TOOL_COMPLETED
+                                : TELOS_AGENT_TOOL_FAILED,
+                    .provider_round = provider_round,
+                    .tool_call_id = collector->calls[index].call_id,
+                    .tool_name = collector->calls[index].name,
+                    .tool_result = collector->calls[index].result,
+                    .tool_error = collector->calls[index].error,
+                };
+
+                if (!options->observe(&event, options->observe_context,
+                                      error)) {
+                    if (error == NULL || *error == NULL) {
+                        set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                                  "Agent Event observer failed");
+                    }
+                    result = false;
+                    break;
+                }
+            }
             if (collector->calls[index].error != NULL) {
                 if (error != NULL) {
                     *error = telos_error_retain(collector->calls[index].error);
@@ -411,6 +498,7 @@ bool telos_agent_run(const struct telos_agent_options *options,
     char *owned_previous_response_id = NULL;
     struct response_collector collector = {0};
     size_t maximum_rounds;
+    size_t maximum_response_bytes;
 
     if (error != NULL) {
         *error = NULL;
@@ -436,16 +524,28 @@ bool telos_agent_run(const struct telos_agent_options *options,
     maximum_rounds = options->maximum_provider_rounds == 0
                          ? 8
                          : options->maximum_provider_rounds;
+    maximum_response_bytes =
+        options->maximum_response_bytes == 0
+            ? TELOS_AGENT_DEFAULT_MAXIMUM_RESPONSE_BYTES
+            : options->maximum_response_bytes;
     current = *request;
+    current.cancel = cancel;
 
     for (size_t round = 0; round < maximum_rounds; ++round) {
+        struct collector_context collector_context = {
+            .collector = &collector,
+            .options = options,
+            .provider_round = round + 1,
+            .maximum_response_bytes = maximum_response_bytes,
+        };
+
         if (telos_cancel_requested(cancel)) {
             set_error(error, TELOS_ERROR_DOMAIN_CANCELLED, ECANCELED,
                       "Agent loop was cancelled");
             goto failure;
         }
         collector.completed = false;
-        if (!options->dispatch(&current, collect_event, &collector,
+        if (!options->dispatch(&current, collect_event, &collector_context,
                                options->provider_context, error) ||
             !collector.completed) {
             if (error == NULL || *error == NULL) {
@@ -470,7 +570,7 @@ bool telos_agent_run(const struct telos_agent_options *options,
             return true;
         }
 
-        if (!run_tools(options, cancel, &collector, error)) {
+        if (!run_tools(options, cancel, &collector, round + 1, error)) {
             goto failure;
         }
         if (current.state_mode == TELOS_PROVIDER_STATE_REMOTE &&

@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <errno.h>
 
 #include <telos/agent.h>
 
@@ -22,6 +23,22 @@ static bool incomplete(const struct telos_provider_request *request,
     (void)provider_context;
     (void)error;
     return true;
+}
+
+static bool oversized(const struct telos_provider_request *request,
+                      telos_provider_event_fn emit,
+                      void *emit_context,
+                      void *provider_context,
+                      struct telos_error **error)
+{
+    const struct telos_provider_event delta = {
+        .kind = TELOS_PROVIDER_TEXT_DELTA,
+        .delta = "12345",
+    };
+
+    (void)request;
+    (void)provider_context;
+    return emit(&delta, emit_context, error);
 }
 
 int main(void)
@@ -55,6 +72,15 @@ int main(void)
     assert(!telos_agent_run(&options, &request, NULL, &result, &error));
     assert(error != NULL);
     assert(telos_error_domain(error) == TELOS_ERROR_DOMAIN_PROTOCOL);
+    telos_error_release(error);
+    error = NULL;
+
+    options.dispatch = oversized;
+    options.maximum_response_bytes = 4;
+    assert(!telos_agent_run(&options, &request, NULL, &result, &error));
+    assert(error != NULL);
+    assert(telos_error_domain(error) == TELOS_ERROR_DOMAIN_PROTOCOL);
+    assert(telos_error_code(error) == EFBIG);
     telos_error_release(error);
     error = NULL;
 
