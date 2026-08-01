@@ -1,14 +1,10 @@
 #ifndef TELOS_PROVIDER_H
 #define TELOS_PROVIDER_H
 
-#include <stddef.h>
+#include <telos/types.h>
 
 #include <telos/error.h>
 #include <telos/value.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 enum telos_provider_state_mode {
     TELOS_PROVIDER_STATE_LOCAL = 1,
@@ -23,6 +19,8 @@ struct telos_provider_request {
     enum telos_provider_state_mode state_mode;
     const char *previous_response_id;
 };
+
+typedef struct telos_provider_request telos_provider_request;
 
 enum telos_provider_event_kind {
     TELOS_PROVIDER_RESPONSE_STARTED = 1,
@@ -47,14 +45,22 @@ struct telos_provider_event {
     const struct telos_value *payload;
 };
 
-typedef bool (*telos_provider_event_fn)(
-    const struct telos_provider_event *event,
-    void *context,
-    struct telos_error **error
-);
+typedef struct telos_provider_event telos_provider_event;
 
-#ifdef __cplusplus
-}
-#endif
+typedef bool (*telos_provider_event_fn)(const telos_provider_event *event,
+                                        void *context,
+                                        struct telos_error **error);
+
+typedef bool (*telos_provider_dispatch_fn)(const telos_provider_request *req,
+                                           telos_provider_event_fn emit,
+                                           void *emit_context,
+                                           void *provider_context,
+                                           struct telos_error **error);
+
+struct telos_provider_definition_v1 {
+    uint32_t struct_size;
+    const char *id;
+    telos_provider_dispatch_fn dispatch;
+};
 
 #endif

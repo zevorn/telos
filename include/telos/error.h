@@ -1,10 +1,6 @@
 #ifndef TELOS_ERROR_H
 #define TELOS_ERROR_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 enum telos_error_domain {
     TELOS_ERROR_DOMAIN_ARGUMENT = 1,
     TELOS_ERROR_DOMAIN_MEMORY,
@@ -19,12 +15,10 @@ enum telos_error_domain {
 
 struct telos_error;
 
-struct telos_error *telos_error_create(
-    enum telos_error_domain domain,
-    int code,
-    const char *message,
-    const struct telos_error *cause
-);
+struct telos_error *telos_error_create(enum telos_error_domain domain,
+                                       int code,
+                                       const char *message,
+                                       const struct telos_error *cause);
 
 struct telos_error *telos_error_retain(const struct telos_error *error);
 
@@ -37,9 +31,5 @@ int telos_error_code(const struct telos_error *error);
 const char *telos_error_message(const struct telos_error *error);
 
 const struct telos_error *telos_error_cause(const struct telos_error *error);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

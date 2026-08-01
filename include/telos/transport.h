@@ -1,14 +1,9 @@
 #ifndef TELOS_TRANSPORT_H
 #define TELOS_TRANSPORT_H
 
-#include <stdbool.h>
-#include <stddef.h>
+#include <telos/types.h>
 
 #include <telos/error.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 struct telos_transport_request {
     const char *method;
@@ -19,24 +14,18 @@ struct telos_transport_request {
     size_t body_size;
 };
 
-typedef bool (*telos_transport_chunk_fn)(
-    const char *data,
-    size_t size,
-    void *context,
-    struct telos_error **error
-);
+typedef struct telos_transport_request telos_transport_request;
 
-typedef bool (*telos_transport_send_fn)(
-    const struct telos_transport_request *request,
-    telos_transport_chunk_fn receive,
-    void *receive_context,
-    int *status_code,
-    void *transport_context,
-    struct telos_error **error
-);
+typedef bool (*telos_transport_chunk_fn)(const char *data,
+                                         size_t size,
+                                         void *context,
+                                         struct telos_error **error);
 
-#ifdef __cplusplus
-}
-#endif
+typedef bool (*telos_transport_send_fn)(const telos_transport_request *request,
+                                        telos_transport_chunk_fn receive,
+                                        void *receive_context,
+                                        int *status_code,
+                                        void *transport_context,
+                                        struct telos_error **error);
 
 #endif

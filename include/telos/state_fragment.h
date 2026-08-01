@@ -1,17 +1,11 @@
 #ifndef TELOS_STATE_FRAGMENT_H
 #define TELOS_STATE_FRAGMENT_H
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <telos/types.h>
 
 #include <telos/cancel.h>
 #include <telos/error.h>
 #include <telos/event.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 enum telos_extension_slot {
     TELOS_SLOT_INPUT_PREPARE = 1,
@@ -35,11 +29,13 @@ struct telos_state_fragment_context {
     void *plugin_context;
 };
 
-typedef enum telos_fragment_result (*telos_state_fragment_handler_fn)(
-    const struct telos_state_fragment_context *context,
-    const struct telos_event *event,
-    struct telos_error **error
-);
+typedef struct telos_state_fragment telos_state_fragment;
+typedef struct telos_state_fragment_context telos_state_fragment_context;
+
+typedef enum telos_fragment_result
+(*telos_state_fragment_handler_fn)(const telos_state_fragment_context *context,
+                                   const struct telos_event *event,
+                                   struct telos_error **error);
 
 struct telos_state_fragment {
     const char *id;
@@ -51,22 +47,14 @@ struct telos_state_fragment {
     uint64_t timeout_milliseconds;
 };
 
-bool telos_state_fragment_validate(
-    const struct telos_state_fragment *fragment,
-    struct telos_error **error
-);
+bool telos_state_fragment_validate(const telos_state_fragment *fragment,
+                                   struct telos_error **error);
 
-bool telos_state_fragment_execute(
-    const struct telos_state_fragment *fragment,
-    enum telos_extension_slot slot,
-    const struct telos_state_fragment_context *context,
-    const struct telos_event *event,
-    enum telos_fragment_result *result,
-    struct telos_error **error
-);
-
-#ifdef __cplusplus
-}
-#endif
+bool telos_state_fragment_execute(const telos_state_fragment *fragment,
+                                  enum telos_extension_slot slot,
+                                  const telos_state_fragment_context *context,
+                                  const struct telos_event *event,
+                                  enum telos_fragment_result *result,
+                                  struct telos_error **error);
 
 #endif

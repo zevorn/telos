@@ -1,4 +1,20 @@
 if get_option('tests')
+    test_types = executable(
+        'test-types',
+        'test_types.c',
+        dependencies: telos_dep,
+    )
+
+    test('types', test_types)
+
+    test_util = executable(
+        'test-util',
+        'test_util.c',
+        dependencies: telos_dep,
+    )
+
+    test('zero-allocation-utilities', test_util)
+
     test_id = executable(
         'test-id',
         'test_id.c',

@@ -1,15 +1,10 @@
 #ifndef TELOS_INSTALL_H
 #define TELOS_INSTALL_H
 
-#include <stdbool.h>
-#include <stddef.h>
+#include <telos/types.h>
 
 #include <telos/cancel.h>
 #include <telos/error.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 enum telos_install_state {
     TELOS_INSTALL_RESOLVE = 1,
@@ -52,15 +47,11 @@ struct telos_install_risk {
     bool requires_approval;
 };
 
-typedef bool (*telos_install_approve_fn)(
-    const struct telos_install_risk *risk,
-    void *context
-);
+typedef bool (*telos_install_approve_fn)(const struct telos_install_risk *risk,
+                                         void *context);
 
-typedef void (*telos_install_progress_fn)(
-    enum telos_install_state state,
-    void *context
-);
+typedef void (*telos_install_progress_fn)(enum telos_install_state state,
+                                          void *context);
 
 struct telos_install_options {
     const char *source;
@@ -87,36 +78,24 @@ struct telos_install_result {
     bool cache_hit;
 };
 
-bool telos_plugin_install(
-    const struct telos_install_options *options,
-    const struct telos_cancel *cancel,
-    struct telos_install_result *result,
-    struct telos_error **error
-);
+bool telos_plugin_install(const struct telos_install_options *options,
+                          const struct telos_cancel *cancel,
+                          struct telos_install_result *result,
+                          struct telos_error **error);
 
-bool telos_plugin_rollback(
-    const char *state_directory,
-    const char *plugin_id,
-    struct telos_error **error
-);
+bool telos_plugin_rollback(const char *state_directory,
+                           const char *plugin_id,
+                           struct telos_error **error);
 
-bool telos_plugin_activate(
-    const char *state_directory,
-    const char *plugin_id,
-    const char *cache_key,
-    struct telos_error **error
-);
+bool telos_plugin_activate(const char *state_directory,
+                           const char *plugin_id,
+                           const char *cache_key,
+                           struct telos_error **error);
 
-bool telos_plugin_remove(
-    const char *state_directory,
-    const char *plugin_id,
-    struct telos_error **error
-);
+bool telos_plugin_remove(const char *state_directory,
+                         const char *plugin_id,
+                         struct telos_error **error);
 
 void telos_install_result_clear(struct telos_install_result *result);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif
