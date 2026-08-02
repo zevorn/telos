@@ -32,6 +32,7 @@
 #define CHAT_MAXIMUM_MESSAGES 64U
 #define CHAT_MAXIMUM_CONVERSATION_BYTES (4U * 1024U * 1024U)
 #define CHAT_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
+#define CHAT_SESSION_NAME_SIZE 128U
 
 struct chat_session {
     const struct telos_authentication_definition_v1 *authentication_definition;
@@ -60,12 +61,18 @@ struct chat_session {
     struct telos_command_registry commands;
     const struct telos_model_descriptor *selected_model;
     const char *configured_provider;
+    char session_name[CHAT_SESSION_NAME_SIZE];
+    struct telos_value *checkpoint[CHAT_MAXIMUM_MESSAGES];
+    size_t checkpoint_count;
 };
 
 struct observer_context {
     telos_frontend_emit_fn emit;
     void *emit_context;
 };
+
+static void drop_messages(struct chat_session *chat, size_t count);
+static void clear_messages(struct chat_session *chat);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -105,6 +112,212 @@ static char *copy_text(const char *text)
         memcpy(copy, text, size);
     }
     return copy;
+}
+
+static bool emit_notice(telos_frontend_emit_fn emit,
+                        void *emit_context,
+                        const char *text,
+                        struct telos_error **error)
+{
+    const struct telos_frontend_event event = {
+        .kind = TELOS_FRONTEND_NOTICE,
+        .text = text,
+    };
+
+    return emit(&event, emit_context, error);
+}
+
+static void clear_checkpoint(struct chat_session *chat)
+{
+    for (size_t index = 0; index < chat->checkpoint_count; ++index) {
+        telos_value_release(chat->checkpoint[index]);
+        chat->checkpoint[index] = NULL;
+    }
+    chat->checkpoint_count = 0;
+}
+
+static bool checkpoint_messages(struct chat_session *chat,
+                                struct telos_error **error)
+{
+    clear_checkpoint(chat);
+    for (size_t index = 0; index < chat->message_count; ++index) {
+        chat->checkpoint[index] = telos_value_retain(chat->messages[index]);
+        if (chat->checkpoint[index] == NULL) {
+            clear_checkpoint(chat);
+            set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                      "Session checkpoint allocation failed");
+            return false;
+        }
+        chat->checkpoint_count += 1;
+    }
+    return true;
+}
+
+static void restore_checkpoint(struct chat_session *chat)
+{
+    clear_messages(chat);
+    for (size_t index = 0; index < chat->checkpoint_count; ++index) {
+        const struct telos_value *message = chat->checkpoint[index];
+        const char *content = telos_value_string(
+            telos_value_get(message, "content"));
+        size_t size = content == NULL ? telos_value_json_size(message)
+                                      : strlen(content);
+
+        chat->messages[index] = telos_value_retain(message);
+        chat->message_sizes[index] = size;
+        chat->message_count += 1;
+        chat->conversation_bytes += size;
+    }
+}
+
+static bool replace_messages(struct chat_session *chat,
+                             const struct telos_value *items,
+                             struct telos_error **error)
+{
+    struct telos_value *owned[CHAT_MAXIMUM_MESSAGES] = {0};
+    size_t count;
+    size_t bytes = 0;
+
+    if (items == NULL || telos_value_type(items) != TELOS_VALUE_ARRAY ||
+        telos_value_count(items) > CHAT_MAXIMUM_MESSAGES) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Imported session messages are invalid");
+        return false;
+    }
+    count = telos_value_count(items);
+    for (size_t index = 0; index < count; ++index) {
+        const struct telos_value *message = telos_value_at(items, index);
+        const char *content;
+        size_t size;
+
+        if (message == NULL ||
+            telos_value_type(message) != TELOS_VALUE_OBJECT) {
+            set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                      "Imported session message is not an object");
+            goto failure;
+        }
+        owned[index] = telos_value_retain(message);
+        content = telos_value_string(telos_value_get(message, "content"));
+        size = content == NULL ? telos_value_json_size(message)
+                               : strlen(content);
+        if (size > CHAT_MAXIMUM_CONVERSATION_BYTES - bytes) {
+            set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EFBIG,
+                      "Imported session exceeds the conversation limit");
+            goto failure;
+        }
+        bytes += size;
+    }
+    clear_messages(chat);
+    for (size_t index = 0; index < count; ++index) {
+        const char *content =
+            telos_value_string(telos_value_get(owned[index], "content"));
+
+        chat->messages[index] = owned[index];
+        chat->message_sizes[index] =
+            content == NULL ? telos_value_json_size(owned[index])
+                            : strlen(content);
+        chat->message_count += 1;
+        chat->conversation_bytes += chat->message_sizes[index];
+        owned[index] = NULL;
+    }
+    return true;
+
+failure:
+    for (size_t index = 0; index < count; ++index) {
+        telos_value_release(owned[index]);
+    }
+    return false;
+}
+
+static bool write_session_file(const struct chat_session *chat,
+                               const char *path,
+                               struct telos_error **error)
+{
+    struct telos_value *items = telos_value_new_array(
+        (const struct telos_value *const *)chat->messages,
+        chat->message_count);
+    size_t size;
+    char *json;
+    FILE *stream;
+    bool result = false;
+
+    if (items == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Session export allocation failed");
+        return false;
+    }
+    size = telos_value_json_size(items);
+    json = malloc(size);
+    stream = json == NULL ? NULL : fopen(path, "wb");
+    if (json == NULL || stream == NULL ||
+        !telos_value_write_json(items, json, size, NULL, error) ||
+        fwrite(json, 1, size - 1, stream) != size - 1 ||
+        fputc('\n', stream) == EOF) {
+        if (stream != NULL) {
+            fclose(stream);
+            stream = NULL;
+        }
+        if (error == NULL || *error == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                      "Session export failed");
+        }
+        goto cleanup;
+    }
+    if (fclose(stream) != 0) {
+        stream = NULL;
+        set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                  "Session export could not be closed");
+        goto cleanup;
+    }
+    stream = NULL;
+    result = true;
+
+cleanup:
+    free(json);
+    telos_value_release(items);
+    return result;
+}
+
+static struct telos_value *read_session_file(const char *path,
+                                             struct telos_error **error)
+{
+    FILE *stream = fopen(path, "rb");
+    long length;
+    char *json;
+    struct telos_value *items;
+
+    if (stream == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                  "Session import file could not be read");
+        return NULL;
+    }
+    if (fseek(stream, 0, SEEK_END) != 0) {
+        fclose(stream);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                  "Session import file could not be read");
+        return NULL;
+    }
+    length = ftell(stream);
+    if (length < 0 || (size_t)length > CHAT_MAXIMUM_CONVERSATION_BYTES ||
+        fseek(stream, 0, SEEK_SET) != 0) {
+        fclose(stream);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                  "Session import file could not be read");
+        return NULL;
+    }
+    json = malloc((size_t)length + 1);
+    if (json == NULL || fread(json, 1, (size_t)length, stream) !=
+                             (size_t)length ||
+        fclose(stream) != 0) {
+        free(json);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                  "Session import file could not be read");
+        return NULL;
+    }
+    json[length] = '\0';
+    items = telos_value_parse_json(json, (size_t)length, error);
+    free(json);
+    return items;
 }
 
 static bool host_matches(const char *host, const char *expected)
@@ -753,6 +966,295 @@ static bool clear_command(const char *arguments,
                          "conversation cleared", NULL, error);
 }
 
+static bool new_command(const char *arguments,
+                        const struct telos_cancel *cancel,
+                        telos_frontend_emit_fn emit,
+                        void *emit_context,
+                        void *context,
+                        struct telos_error **error)
+{
+    struct chat_session *chat = context;
+
+    (void)arguments;
+    (void)cancel;
+    clear_messages(chat);
+    chat->session_name[0] = '\0';
+    return emit_notice(emit, emit_context, "new session started", error);
+}
+
+static bool name_command(const char *arguments,
+                         const struct telos_cancel *cancel,
+                         telos_frontend_emit_fn emit,
+                         void *emit_context,
+                         void *context,
+                         struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char message[CHAT_SESSION_NAME_SIZE + 32];
+
+    (void)cancel;
+    if (arguments == NULL || arguments[0] == '\0') {
+        if (chat->session_name[0] == '\0') {
+            return emit_notice(emit, emit_context, "session is unnamed", error);
+        }
+        if (snprintf(message, sizeof(message), "session name: %s",
+                     chat->session_name) >= (int)sizeof(message)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Session name is too long");
+            return false;
+        }
+        return emit_notice(emit, emit_context, message, error);
+    }
+    if (strlen(arguments) >= sizeof(chat->session_name)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Session name is too long");
+        return false;
+    }
+    memcpy(chat->session_name, arguments, strlen(arguments) + 1);
+    if (snprintf(message, sizeof(message), "session named: %s",
+                 chat->session_name) >= (int)sizeof(message)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Session name is too long");
+        return false;
+    }
+    return emit_notice(emit, emit_context, message, error);
+}
+
+static bool session_command(const char *arguments,
+                            const struct telos_cancel *cancel,
+                            telos_frontend_emit_fn emit,
+                            void *emit_context,
+                            void *context,
+                            struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char message[256];
+
+    (void)arguments;
+    (void)cancel;
+    if (snprintf(message, sizeof(message),
+                 "session %s · %zu messages · %zu bytes",
+                 chat->session_name[0] == '\0' ? "unnamed" : chat->session_name,
+                 chat->message_count, chat->conversation_bytes) >=
+        (int)sizeof(message)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Session summary is too long");
+        return false;
+    }
+    return emit_notice(emit, emit_context, message, error);
+}
+
+static bool tree_command(const char *arguments,
+                         const struct telos_cancel *cancel,
+                         telos_frontend_emit_fn emit,
+                         void *emit_context,
+                         void *context,
+                         struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char text[TELOS_COMMAND_ARGUMENT_SIZE] = {0};
+    size_t used = 0;
+
+    (void)arguments;
+    (void)cancel;
+    for (size_t index = 0; index < chat->message_count; ++index) {
+        const struct telos_value *message = chat->messages[index];
+        const char *role = telos_value_string(telos_value_get(message, "role"));
+        const char *content =
+            telos_value_string(telos_value_get(message, "content"));
+        int written = snprintf(text + used, sizeof(text) - used,
+                               "%zu: %s%s%s\n", index,
+                               role == NULL ? "item" : role,
+                               content == NULL ? "" : " ",
+                               content == NULL ? "" : content);
+
+        if (written < 0 || (size_t)written >= sizeof(text) - used) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Session tree is too large");
+            return false;
+        }
+        used += (size_t)written;
+    }
+    if (used == 0) {
+        memcpy(text, "session tree is empty", sizeof("session tree is empty"));
+    }
+    return emit_notice(emit, emit_context, text, error);
+}
+
+static bool compact_command(const char *arguments,
+                            const struct telos_cancel *cancel,
+                            telos_frontend_emit_fn emit,
+                            void *emit_context,
+                            void *context,
+                            struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    size_t keep = 8;
+
+    (void)arguments;
+    (void)cancel;
+    if (chat->message_count > keep) {
+        drop_messages(chat, chat->message_count - keep);
+    }
+    return emit_notice(emit, emit_context, "conversation compacted", error);
+}
+
+static bool fork_command(const char *arguments,
+                         const struct telos_cancel *cancel,
+                         telos_frontend_emit_fn emit,
+                         void *emit_context,
+                         void *context,
+                         struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    const char *name = arguments == NULL || arguments[0] == '\0'
+                           ? "fork"
+                           : arguments;
+
+    (void)cancel;
+    if (!checkpoint_messages(chat, error)) {
+        return false;
+    }
+    if (strlen(name) >= sizeof(chat->session_name)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Fork name is too long");
+        return false;
+    }
+    memcpy(chat->session_name, name, strlen(name) + 1);
+    return emit_notice(emit, emit_context, "session fork checkpoint saved",
+                       error);
+}
+
+static bool resume_command(const char *arguments,
+                           const struct telos_cancel *cancel,
+                           telos_frontend_emit_fn emit,
+                           void *emit_context,
+                           void *context,
+                           struct telos_error **error)
+{
+    struct chat_session *chat = context;
+
+    (void)arguments;
+    (void)cancel;
+    if (chat->checkpoint_count == 0) {
+        return emit_notice(emit, emit_context, "no session checkpoint exists",
+                           error);
+    }
+    restore_checkpoint(chat);
+    return emit_notice(emit, emit_context, "session checkpoint resumed", error);
+}
+
+static bool copy_command(const char *arguments,
+                         const struct telos_cancel *cancel,
+                         telos_frontend_emit_fn emit,
+                         void *emit_context,
+                         void *context,
+                         struct telos_error **error)
+{
+    struct chat_session *chat = context;
+
+    (void)arguments;
+    (void)cancel;
+    for (size_t index = chat->message_count; index > 0; --index) {
+        const struct telos_value *message = chat->messages[index - 1];
+        const char *role = telos_value_string(telos_value_get(message, "role"));
+        const char *content =
+            telos_value_string(telos_value_get(message, "content"));
+
+        if (role != NULL && strcmp(role, "assistant") == 0 && content != NULL) {
+            return emit_notice(emit, emit_context, content, error);
+        }
+    }
+    return emit_notice(emit, emit_context, "no assistant response to copy",
+                       error);
+}
+
+static bool export_command(const char *arguments,
+                           const struct telos_cancel *cancel,
+                           telos_frontend_emit_fn emit,
+                           void *emit_context,
+                           void *context,
+                           struct telos_error **error)
+{
+    struct chat_session *chat = context;
+
+    (void)cancel;
+    if (arguments == NULL || arguments[0] == '\0') {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Usage: /export PATH");
+        return false;
+    }
+    if (!write_session_file(chat, arguments, error)) {
+        return false;
+    }
+    return emit_notice(emit, emit_context, "session exported", error);
+}
+
+static bool import_command(const char *arguments,
+                           const struct telos_cancel *cancel,
+                           telos_frontend_emit_fn emit,
+                           void *emit_context,
+                           void *context,
+                           struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    struct telos_value *items;
+    bool result;
+
+    (void)cancel;
+    if (arguments == NULL || arguments[0] == '\0') {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Usage: /import PATH");
+        return false;
+    }
+    items = read_session_file(arguments, error);
+    if (items == NULL) {
+        return false;
+    }
+    result = replace_messages(chat, items, error);
+    telos_value_release(items);
+    if (!result) {
+        return false;
+    }
+    return emit_notice(emit, emit_context, "session imported", error);
+}
+
+static bool settings_command(const char *arguments,
+                             const struct telos_cancel *cancel,
+                             telos_frontend_emit_fn emit,
+                             void *emit_context,
+                             void *context,
+                             struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char message[512];
+
+    (void)arguments;
+    (void)cancel;
+    if (snprintf(message, sizeof(message), "provider=%s model=%s endpoint=%s",
+                 chat_provider_get(chat), chat_model_get(chat),
+                 chat->configured_endpoint) >= (int)sizeof(message)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Settings summary is too long");
+        return false;
+    }
+    return emit_notice(emit, emit_context, message, error);
+}
+
+static bool static_notice_command(const char *arguments,
+                                  const struct telos_cancel *cancel,
+                                  telos_frontend_emit_fn emit,
+                                  void *emit_context,
+                                  void *context,
+                                  struct telos_error **error)
+{
+    const char *message = context;
+
+    (void)arguments;
+    (void)cancel;
+    return emit_notice(emit, emit_context, message, error);
+}
+
 static bool model_command(const char *arguments,
                           const struct telos_cancel *cancel,
                           telos_frontend_emit_fn emit, void *emit_context,
@@ -803,6 +1305,16 @@ static bool model_command(const char *arguments,
     }
     return emit_frontend(&observer, TELOS_FRONTEND_NOTICE, message, NULL,
                          error);
+}
+
+static bool scoped_models_command(const char *arguments,
+                                  const struct telos_cancel *cancel,
+                                  telos_frontend_emit_fn emit,
+                                  void *emit_context,
+                                  void *context,
+                                  struct telos_error **error)
+{
+    return model_command(arguments, cancel, emit, emit_context, context, error);
 }
 
 static bool login_command_handler(const char *arguments,
@@ -926,9 +1438,120 @@ static bool register_chat_commands(struct chat_session *chat,
             .context = chat,
         },
         {
+            .name = "new",
+            .help = "start a new conversation",
+            .run = new_command,
+            .context = chat,
+        },
+        {
             .name = "model",
             .help = "list or select a model",
             .run = model_command,
+            .context = chat,
+        },
+        {
+            .name = "scoped-models",
+            .help = "list models available to this session",
+            .run = scoped_models_command,
+            .context = chat,
+        },
+        {
+            .name = "name",
+            .help = "show or set the session name",
+            .run = name_command,
+            .context = chat,
+        },
+        {
+            .name = "session",
+            .help = "show the current session summary",
+            .run = session_command,
+            .context = chat,
+        },
+        {
+            .name = "tree",
+            .help = "show the conversation tree",
+            .run = tree_command,
+            .context = chat,
+        },
+        {
+            .name = "compact",
+            .help = "compact older conversation messages",
+            .run = compact_command,
+            .context = chat,
+        },
+        {
+            .name = "fork",
+            .help = "save a session fork checkpoint",
+            .run = fork_command,
+            .context = chat,
+        },
+        {
+            .name = "clone",
+            .help = "clone a session fork checkpoint",
+            .run = fork_command,
+            .context = chat,
+        },
+        {
+            .name = "resume",
+            .help = "resume the session fork checkpoint",
+            .run = resume_command,
+            .context = chat,
+        },
+        {
+            .name = "copy",
+            .help = "show the latest assistant response",
+            .run = copy_command,
+            .context = chat,
+        },
+        {
+            .name = "export",
+            .help = "export the session as a JSON array",
+            .run = export_command,
+            .context = chat,
+        },
+        {
+            .name = "import",
+            .help = "import a JSON session array",
+            .run = import_command,
+            .context = chat,
+        },
+        {
+            .name = "settings",
+            .help = "show current provider settings",
+            .run = settings_command,
+            .context = chat,
+        },
+        {
+            .name = "reload",
+            .help = "reload runtime guidance",
+            .run = static_notice_command,
+            .context = "runtime guidance is refreshed per turn",
+        },
+        {
+            .name = "hotkeys",
+            .help = "show terminal editing keys",
+            .run = static_notice_command,
+            .context =
+                "Enter submits · Ctrl+J or Alt+Enter adds a line · Esc cancels",
+        },
+        {
+            .name = "changelog",
+            .help = "show the Telos release note",
+            .run = static_notice_command,
+            .context =
+                "Telos 0.1.0: Plugin-backed Pi-compatible terminal agent",
+        },
+        {
+            .name = "trust",
+            .help = "show project trust policy",
+            .run = static_notice_command,
+            .context =
+                "project guidance is loaded from the current trusted root",
+        },
+        {
+            .name = "share",
+            .help = "export the session for sharing",
+            .run = export_command,
             .context = chat,
         },
         {
@@ -1114,6 +1737,7 @@ static bool initialize_chat(struct chat_session *chat,
 static void clear_chat(struct chat_session *chat)
 {
     clear_messages(chat);
+    clear_checkpoint(chat);
     telos_value_release(chat->provider_options);
     telos_value_release(chat->tools);
     telos_prompt_snapshot_release(chat->prompt);

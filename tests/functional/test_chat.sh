@@ -57,6 +57,49 @@ printf '/login status\n/quit\n' | HOME="$temporary/home" \
     "$telos" chat >"$temporary/login-ready.output"
 grep -Fq "OpenAI is logged out" "$temporary/login-ready.output"
 
+printf '[{"role":"user","content":"saved"}]\n' \
+    >"$temporary/import.json"
+{
+    printf '/import %s\n' "$temporary/import.json"
+    printf '%s\n' \
+        '/name command-test' \
+        '/session' \
+        '/tree' \
+        '/fork child' \
+        '/clone' \
+        '/new' \
+        '/resume' \
+        '/compact' \
+        '/scoped-models' \
+        '/settings' \
+        '/reload' \
+        '/hotkeys' \
+        '/changelog' \
+        '/trust'
+    printf '/export %s\n/share %s\n/quit\n' \
+        "$temporary/export.json" "$temporary/share.json"
+} | HOME="$temporary/home" \
+    TELOS_AGENT_MODEL=unconfigured "$telos" chat >"$temporary/commands.output"
+grep -Fq "session imported" "$temporary/commands.output"
+grep -Fq "session named: command-test" "$temporary/commands.output"
+grep -Fq "session command-test" "$temporary/commands.output"
+grep -Fq "0: user saved" "$temporary/commands.output"
+grep -Fq "session fork checkpoint saved" "$temporary/commands.output"
+grep -Fq "new session started" "$temporary/commands.output"
+grep -Fq "session checkpoint resumed" "$temporary/commands.output"
+grep -Fq "conversation compacted" "$temporary/commands.output"
+grep -Fq "provider=openai model=not configured" \
+    "$temporary/commands.output"
+grep -Fq "runtime guidance is refreshed per turn" \
+    "$temporary/commands.output"
+grep -Fq "Ctrl+J or Alt+Enter" "$temporary/commands.output"
+grep -Fq "Plugin-backed Pi-compatible terminal agent" \
+    "$temporary/commands.output"
+grep -Fq "current trusted root" "$temporary/commands.output"
+grep -Fq "session exported" "$temporary/commands.output"
+test -s "$temporary/export.json"
+test -s "$temporary/share.json"
+
 "$server" >"$temporary/chat-port" &
 server_pid=$!
 attempt=0
