@@ -140,7 +140,7 @@ int main(void)
     descriptor.kind = 0;
     passed = passed && invalid_descriptor(registry, descriptor);
     descriptor.id = "bad-kind-high";
-    descriptor.kind = TELOS_EXTENSION_AUTHENTICATION + 1;
+    descriptor.kind = TELOS_EXTENSION_MODEL_CATALOG + 1;
     passed = passed && invalid_descriptor(registry, descriptor);
     descriptor.id = "missing-capability";
     descriptor.kind = TELOS_EXTENSION_TOOL;

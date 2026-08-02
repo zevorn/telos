@@ -20,6 +20,7 @@ enum telos_extension_kind {
     TELOS_EXTENSION_EVENT_HANDLER,
     TELOS_EXTENSION_PROMPT,
     TELOS_EXTENSION_AUTHENTICATION,
+    TELOS_EXTENSION_MODEL_CATALOG,
 };
 
 struct telos_extension_descriptor {

@@ -36,6 +36,13 @@ struct telos_model_catalog {
     bool has_current;
 };
 
+struct telos_model_catalog_definition_v1 {
+    uint32_t struct_size;
+    const char *id;
+    bool (*add)(struct telos_model_catalog *catalog,
+                struct telos_error **error);
+};
+
 typedef bool (*telos_model_visit_fn)(
     const struct telos_model_descriptor *model, void *context,
     struct telos_error **error);
