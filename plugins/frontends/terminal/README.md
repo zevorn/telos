@@ -28,4 +28,7 @@ entries, and each queued text fragment is limited to 2 KiB.
 `!command` executes a bounded shell command in the session working directory;
 `!!command` feeds its output into the next Agent Turn. Ctrl+G opens the prompt
 in `$VISUAL` or `$EDITOR`, Ctrl+L redraws the screen, Tab completes a command,
-and `/copy` uses OSC 52 when the terminal supports clipboard control.
+and `/copy` uses OSC 52 when the terminal supports clipboard control. The
+Frontend also accepts `/login PROVIDER`, `/login-status PROVIDER`,
+`/logout PROVIDER`, `/model PROVIDER/MODEL`, and `/thinking LEVEL` without
+coupling provider-specific behavior into the terminal implementation.

@@ -53,8 +53,10 @@ export TELOS_AGENT_MODEL='your-responses-model'
 build/tools/telos
 ```
 
-You can also start without a model, run `/login`, and select one from the
-catalog with `/model openai/gpt-5` while the TUI is running.
+You can also start without a model, run `/login` (or `/login PROVIDER`), and
+select one from the catalog with `/model openai/gpt-5` while the TUI is
+running. `/model PROVIDER/MODEL` also registers a bounded custom model when
+the identifier is not in the catalog.
 
 Running `telos` without a command opens the interactive terminal UI. Use
 `telos chat`, or run a single pipeline-friendly turn with
@@ -81,9 +83,15 @@ printf '%s\n' '{"type":"prompt","message":"hello"}' \
 ```
 
 Inside the TUI, type `login` or `/login` to authenticate with an OpenAI
-ChatGPT account. API-key authentication remains available through
-`OPENAI_API_KEY`. See [the OpenAI login guide](docs/openai-login.md) for the
-device-code flow, credential storage, status, and logout commands.
+ChatGPT account. `/login deepseek`, `/login zai`, and `/login anthropic` use
+the corresponding API-key Plugins; their environment variables are
+`DEEPSEEK_API_KEY`, `ZAI_API_KEY`, and `ANTHROPIC_API_KEY`. `/login-status
+PROVIDER` and `/logout PROVIDER` address a provider without changing the
+active model. `/thinking LEVEL` selects `off`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, or `max` when the selected model advertises reasoning.
+API-key authentication remains available through `OPENAI_API_KEY`. See [the
+OpenAI login guide](docs/openai-login.md) for the device-code flow,
+credential storage, status, and logout commands.
 
 See [the terminal Agent guide](docs/linux-agent.md) for configuration,
 key bindings, local endpoints, and troubleshooting.

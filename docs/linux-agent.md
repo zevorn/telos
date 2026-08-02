@@ -40,9 +40,10 @@ build/tools/telos
 ```
 
 The running TUI accepts `/model` to list the catalog and `/model
-openai/gpt-5` to select a model without restarting. A model name supplied by
-`TELOS_AGENT_MODEL` is registered as a custom model when it is not in the
-official catalog.
+openai/gpt-5` to select a model without restarting. `/model PROVIDER/MODEL`
+registers a bounded custom model when it is not in the official catalog, so a
+new upstream model does not require a Telos rebuild. `/thinking LEVEL` updates
+the provider request options for reasoning-capable models.
 
 See [openai-login.md](openai-login.md) for credential storage, refresh,
 status, logout, and the API-key alternative.
@@ -154,9 +155,10 @@ directory, file contents are bounded, and shell output is capped. Set
 
 Bracketed paste is enabled. `/help` displays commands, `/clear` drops the
 bounded conversation history, and `/quit` exits. `login` or `/login` starts
-OpenAI device login, `/login status` shows the current account state, and
-`logout` or `/logout` removes the cached session. When stdin or stdout is not
-a terminal, the Frontend automatically uses a plain line-oriented format.
+OpenAI device login, `/login PROVIDER` selects an API-key login target,
+`/login-status PROVIDER` shows a provider's state, and `/logout PROVIDER`
+removes that provider's cached key. When stdin or stdout is not a terminal,
+the Frontend automatically uses a plain line-oriented format.
 
 Use `/export PATH` to write the current bounded conversation as JSON and
 `/resume PATH` to validate and restore that file. `/fork` and `/clone` keep an
