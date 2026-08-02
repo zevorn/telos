@@ -11,3 +11,8 @@ sources = [
 sources = [
     "src/state/session.c",
 ]
+
+[component.reactor]
+sources = [
+    "src/reactor/reactor.c",
+]

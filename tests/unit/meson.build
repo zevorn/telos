@@ -1,6 +1,7 @@
 unit_tests = [
     ['command', 'test-command', 'test_command.c'],
     ['model', 'test-model', 'test_model.c'],
+    ['reactor', 'test-reactor', 'test_reactor.c'],
     ['types', 'test-types', 'test_types.c'],
     ['id', 'test-id', 'test_id.c'],
     ['zero-allocation-utilities', 'test-util', 'test_util.c'],

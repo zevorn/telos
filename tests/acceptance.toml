@@ -11,7 +11,7 @@ tests = ["id", "error", "cancel", "value-json", "value-json-invalid", "base-inva
 external = []
 
 [criteria.AC-3]
-tests = ["session-no-tool", "session-tool-join", "session-actor", "session-invalid", "state-fragment-slots"]
+tests = ["reactor", "session-no-tool", "session-tool-join", "session-actor", "session-invalid", "state-fragment-slots"]
 external = []
 
 [criteria.AC-4]

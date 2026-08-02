@@ -1,5 +1,6 @@
 subdir('base')
 subdir('state')
+subdir('reactor')
 subdir('store')
 subdir('actor')
 subdir('registry')
@@ -17,6 +18,7 @@ telos_core_dep = declare_dependency(
     dependencies: [
         telos_base_dep,
         telos_state_dep,
+        telos_reactor_dep,
         telos_store_dep,
         telos_actor_dep,
         telos_registry_dep,

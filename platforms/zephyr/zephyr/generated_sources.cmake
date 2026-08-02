@@ -6,4 +6,5 @@ zephyr_library_sources(
     ${CMAKE_CURRENT_LIST_DIR}/../../../src/base/value.c
     ${CMAKE_CURRENT_LIST_DIR}/../../../src/base/value_json.c
     ${CMAKE_CURRENT_LIST_DIR}/../../../src/state/session.c
+    ${CMAKE_CURRENT_LIST_DIR}/../../../src/reactor/reactor.c
 )
