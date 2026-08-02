@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 
 #include <errno.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1396,6 +1397,71 @@ static bool session_command(const char *arguments,
     return emit_notice(emit, emit_context, message, error);
 }
 
+static bool sessions_command(const char *arguments,
+                             const struct telos_cancel *cancel,
+                             telos_frontend_emit_fn emit,
+                             void *emit_context,
+                             void *context,
+                             struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char directory[CHAT_PATH_SIZE];
+    char text[TELOS_COMMAND_ARGUMENT_SIZE] = "saved sessions:\n";
+    size_t used = sizeof("saved sessions:\n") - 1;
+    const char *separator;
+    DIR *stream;
+    struct dirent *entry;
+    size_t count = 0;
+
+    (void)arguments;
+    (void)cancel;
+    separator = strrchr(chat->session_path, '/');
+    if (separator == NULL ||
+        (size_t)(separator - chat->session_path) >= sizeof(directory)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Session directory is invalid");
+        return false;
+    }
+    memcpy(directory, chat->session_path,
+           (size_t)(separator - chat->session_path));
+    directory[separator - chat->session_path] = '\0';
+    stream = opendir(directory);
+    if (stream == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Session directory could not be opened");
+        return false;
+    }
+    while ((entry = readdir(stream)) != NULL && count < 32U) {
+        size_t name_size = strlen(entry->d_name);
+        int written;
+
+        if (name_size < sizeof(".jsonl") - 1 ||
+            strcmp(entry->d_name + name_size - (sizeof(".jsonl") - 1),
+                   ".jsonl") != 0) {
+            continue;
+        }
+        written = snprintf(text + used, sizeof(text) - used, "  %s%s\n",
+                           entry->d_name,
+                           strcmp(entry->d_name,
+                                  strrchr(chat->session_path, '/') + 1) == 0
+                               ? " (current)"
+                               : "");
+        if (written < 0 || (size_t)written >= sizeof(text) - used) {
+            closedir(stream);
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Session list is too large");
+            return false;
+        }
+        used += (size_t)written;
+        ++count;
+    }
+    closedir(stream);
+    if (count == 0) {
+        memcpy(text, "no saved sessions", sizeof("no saved sessions"));
+    }
+    return emit_notice(emit, emit_context, text, error);
+}
+
 static bool tree_command(const char *arguments,
                          const struct telos_cancel *cancel,
                          telos_frontend_emit_fn emit,
@@ -1892,6 +1958,12 @@ static bool register_chat_commands(struct chat_session *chat,
             .name = "session",
             .help = "show the current session summary",
             .run = session_command,
+            .context = chat,
+        },
+        {
+            .name = "sessions",
+            .help = "list persisted sessions",
+            .run = sessions_command,
             .context = chat,
         },
         {

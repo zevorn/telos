@@ -117,6 +117,7 @@ printf '[{"role":"user","content":"saved"}]\n' \
     printf '%s\n' \
         '/name command-test' \
         '/session' \
+        '/sessions' \
         '/tree' \
         '/fork child' \
         '/clone' \
@@ -140,6 +141,7 @@ printf '[{"role":"user","content":"saved"}]\n' \
 grep -Fq "session imported" "$temporary/commands.output"
 grep -Fq "session named: command-test" "$temporary/commands.output"
 grep -Fq "session command-test" "$temporary/commands.output"
+grep -Fq "saved sessions:" "$temporary/commands.output"
 grep -Fq "0: user saved" "$temporary/commands.output"
 grep -Fq "session fork checkpoint saved" "$temporary/commands.output"
 grep -Fq "new session started" "$temporary/commands.output"
