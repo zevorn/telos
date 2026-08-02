@@ -853,18 +853,34 @@ static void stream_text(struct terminal_state *state, const char *text)
     flush_stream(state, false);
 }
 
-static void write_status_line(struct terminal_state *state, const char *symbol,
-                              const char *name, const char *color)
+static void write_status_line_segment(struct terminal_state *state,
+                                      const char *symbol,
+                                      const char *text, size_t size,
+                                      const char *color)
 {
-    const char *label = name == NULL || name[0] == '\0' ? "tool" : name;
-
     if (color != NULL) {
         write_text(state->output_descriptor, color);
     }
     write_text(state->output_descriptor, symbol);
     write_text(state->output_descriptor, " ");
-    write_sanitized(state, label, strlen(label));
+    write_sanitized(state, text, size);
     write_text(state->output_descriptor, "\033[0m\033[K\r\n");
+}
+
+static void write_status_line(struct terminal_state *state, const char *symbol,
+                              const char *name, const char *color)
+{
+    const char *label = name == NULL || name[0] == '\0' ? "tool" : name;
+    size_t size = strlen(label);
+    size_t start = 0;
+
+    for (size_t index = 0; index <= size; ++index) {
+        if (label[index] == '\n' || index == size) {
+            write_status_line_segment(state, symbol, label + start,
+                                      index - start, color);
+            start = index + 1;
+        }
+    }
 }
 
 static void write_clipboard(struct terminal_state *state)
