@@ -2678,12 +2678,19 @@ static bool initialize_chat(struct chat_session *chat,
     const char *provider_name = telos_config_get(config, "agent.provider");
     const char *model = telos_config_get(config, "agent.model");
     const char *endpoint = telos_config_get(config, "agent.endpoint");
+    const char *thinking = telos_config_get(config, "agent.thinking");
     const char *authentication_endpoint =
         getenv("TELOS_OPENAI_AUTH_ENDPOINT");
 
     chat->home_directory = home_directory;
     chat->current_directory = current_directory;
-    memcpy(chat->thinking_level, "off", sizeof("off"));
+    if (thinking == NULL || !thinking_level_valid(thinking) ||
+        strlen(thinking) >= sizeof(chat->thinking_level)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Agent thinking level is invalid");
+        return false;
+    }
+    memcpy(chat->thinking_level, thinking, strlen(thinking) + 1);
     if (!initialize_session_store(chat, home_directory, error)) {
         return false;
     }
@@ -2775,6 +2782,10 @@ static bool initialize_chat(struct chat_session *chat,
     if (chat->tools == NULL || chat->provider_options == NULL) {
         set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
                   "Agent Provider options allocation failed");
+        return false;
+    }
+    if (chat->selected_model != NULL &&
+        !set_thinking_options(chat, chat->thinking_level, error)) {
         return false;
     }
     return create_prompt(chat, home_directory, current_directory, error);

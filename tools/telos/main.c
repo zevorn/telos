@@ -59,6 +59,7 @@ static void usage(FILE *stream)
           "  --state-dir PATH       Override state.directory\n"
           "  --provider ID          Override agent.provider\n"
           "  --model ID             Override agent.model\n"
+          "  --thinking LEVEL       Override agent.thinking\n"
           "  --endpoint URL         Override agent.endpoint\n"
           "  --builder BACKEND      native or container\n"
           "  --sdk-pkgconfig PATH   SDK pkg-config directory\n"
@@ -740,6 +741,13 @@ int main(int argc, char **argv)
         } else if (index + 1 < argc &&
                    strcmp(argv[index], "--model") == 0) {
             if (!telos_config_override(config, "agent.model",
+                                       argv[index + 1], &error)) {
+                break;
+            }
+            index += 2;
+        } else if (index + 1 < argc &&
+                   strcmp(argv[index], "--thinking") == 0) {
+            if (!telos_config_override(config, "agent.thinking",
                                        argv[index + 1], &error)) {
                 break;
             }

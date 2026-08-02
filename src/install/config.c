@@ -12,6 +12,7 @@ enum config_key {
     CONFIG_AGENT_PROVIDER,
     CONFIG_AGENT_MODEL,
     CONFIG_AGENT_ENDPOINT,
+    CONFIG_AGENT_THINKING,
     CONFIG_STATE_DIRECTORY,
     CONFIG_BUILDER_BACKEND,
     CONFIG_KEY_COUNT,
@@ -31,6 +32,7 @@ static const char *const keys[CONFIG_KEY_COUNT] = {
     "agent.provider",
     "agent.model",
     "agent.endpoint",
+    "agent.thinking",
     "state.directory",
     "builder.backend",
 };
@@ -39,6 +41,7 @@ static const char *const defaults[CONFIG_KEY_COUNT] = {
     "openai-responses",
     "unconfigured",
     "https://api.openai.com/v1",
+    "off",
     "",
     "container",
 };
@@ -47,6 +50,7 @@ static const char *const environment_names[CONFIG_KEY_COUNT] = {
     "TELOS_AGENT_PROVIDER",
     "TELOS_AGENT_MODEL",
     "TELOS_AGENT_ENDPOINT",
+    "TELOS_AGENT_THINKING",
     "TELOS_STATE_DIRECTORY",
     "TELOS_BUILDER_BACKEND",
 };

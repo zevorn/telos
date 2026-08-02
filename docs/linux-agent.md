@@ -126,6 +126,7 @@ endpoint = "https://api.openai.com/v1"
 | --- | --- | --- |
 | `agent.provider` | `TELOS_AGENT_PROVIDER` | `--provider` |
 | `agent.model` | `TELOS_AGENT_MODEL` | `--model` |
+| `agent.thinking` | `TELOS_AGENT_THINKING` | `--thinking` |
 | `agent.endpoint` | `TELOS_AGENT_ENDPOINT` | `--endpoint` |
 
 The Project Guidance Plugin loads `~/.telos/AGENTS.md` and each applicable
