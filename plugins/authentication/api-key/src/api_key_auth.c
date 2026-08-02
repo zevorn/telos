@@ -340,6 +340,10 @@ static bool login_authentication(telos_authentication *authentication,
         return false;
     }
     value = getenv(authentication->profile->environment);
+    if ((value == NULL || value[0] == '\0') &&
+        strcmp(authentication->profile->provider, "zai") == 0) {
+        value = getenv("Z_AI_API_KEY");
+    }
     if (value == NULL || value[0] == '\0') {
         if (authentication->state == TELOS_AUTHENTICATION_SIGNED_IN) {
             return emit_completed(emit, emit_context, error);

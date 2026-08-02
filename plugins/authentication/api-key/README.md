@@ -11,7 +11,7 @@ persists it without printing the secret:
 | Provider | Environment variable |
 | --- | --- |
 | DeepSeek | `DEEPSEEK_API_KEY` |
-| Z.AI | `ZAI_API_KEY` |
+| Z.AI | `ZAI_API_KEY` or `Z_AI_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
 
 Set the variable before starting Telos, then use `/login`. `/logout` removes
