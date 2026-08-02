@@ -25,6 +25,7 @@ telos_official_plugin_deps = [
     telos_memory_store_plugin_dep,
     telos_ring_store_plugin_dep,
     telos_markdown_store_plugin_dep,
+    telos_jsonl_store_plugin_dep,
     telos_openai_responses_plugin_dep,
     telos_openai_chat_plugin_dep,
     telos_anthropic_plugin_dep,

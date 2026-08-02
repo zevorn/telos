@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 
+#include <telos/plugins/jsonl_store.h>
 #include <telos/plugins/markdown_store.h>
 #include <telos/plugins/memory_store.h>
 #include <telos/plugins/ring_store.h>
@@ -65,6 +67,8 @@ int main(void)
 {
     struct telos_error *error = NULL;
     struct telos_event_store *invalid;
+    char jsonl_path[] = "/tmp/telos-jsonl-store-XXXXXX";
+    int jsonl_descriptor = mkstemp(jsonl_path);
     bool passed = telos_event_store_count(NULL) == 0 &&
                   !telos_event_store_append(NULL, NULL, &error) &&
                   error != NULL;
@@ -96,10 +100,30 @@ int main(void)
         telos_markdown_store_create("/missing/telos/store/events.md", &error);
     passed = passed && invalid == NULL && error != NULL;
     telos_error_release(error);
+    error = NULL;
+    invalid = telos_jsonl_store_create(NULL, &error);
+    passed = passed && invalid == NULL && error != NULL;
+    telos_error_release(error);
+    error = NULL;
+    invalid = telos_jsonl_store_create("", &error);
+    passed = passed && invalid == NULL && error != NULL;
+    telos_error_release(error);
+    error = NULL;
+    passed = passed && jsonl_descriptor >= 0;
+    if (jsonl_descriptor >= 0) {
+        close(jsonl_descriptor);
+    }
 
     telos_event_store_destroy(NULL);
     passed = passed && test_store(telos_memory_store_create(NULL)) &&
-             test_store(telos_ring_store_create(16, NULL));
+             test_store(telos_ring_store_create(16, NULL)) &&
+             test_store(telos_jsonl_store_create(jsonl_path, NULL));
+    invalid = telos_jsonl_store_create(jsonl_path, &error);
+    passed = passed && invalid != NULL &&
+             telos_event_store_count(invalid) == 10;
+    telos_error_release(error);
+    telos_event_store_destroy(invalid);
+    unlink(jsonl_path);
     if (!passed) {
         fputs("Event Store validation matrix failed\n", stderr);
         return 1;

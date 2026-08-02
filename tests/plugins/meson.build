@@ -467,6 +467,11 @@ if get_option('shared_plugins')
     official_plugin_source_paths += [
         meson.project_source_root() / 'plugins/models/catalog',
     ]
+    official_plugin_modules += [telos_jsonl_store_module]
+    official_plugin_module_paths += [telos_jsonl_store_module.full_path()]
+    official_plugin_source_paths += [
+        meson.project_source_root() / 'plugins/stores/jsonl',
+    ]
 
     test_official_plugins = executable(
         'test-official-plugins',

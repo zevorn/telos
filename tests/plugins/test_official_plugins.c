@@ -162,12 +162,12 @@ int main(int argc, char **argv)
         "dev.zevorn.project-guidance",
         "dev.zevorn.openai-codex-auth",
         "dev.zevorn.terminal-frontend", "dev.zevorn.curl-transport",
-        "dev.zevorn.model-catalog",
+        "dev.zevorn.model-catalog", "dev.zevorn.jsonl-store",
     };
     size_t plugin_count;
     struct telos_registry *registry;
     struct telos_host_api_v1 host;
-    struct telos_plugin_module *modules[12] = {0};
+    struct telos_plugin_module *modules[13] = {0};
     struct telos_registry_generation *generation;
     struct telos_value *empty = telos_value_new_object(NULL, NULL, 0);
     struct telos_value *capacity = telos_value_new_integer(2);
@@ -194,11 +194,20 @@ int main(int argc, char **argv)
     const struct telos_value *empty_path_values[] = {empty_path};
     struct telos_value *invalid_markdown =
         telos_value_new_object(markdown_keys, empty_path_values, 1);
+    char jsonl_path[] = "/tmp/telos-official-jsonl-XXXXXX";
+    int jsonl_descriptor = mkstemp(jsonl_path);
+    struct telos_value *jsonl_path_value =
+        telos_value_new_string(jsonl_path);
+    const struct telos_value *jsonl_values[] = {jsonl_path_value};
+    struct telos_value *jsonl =
+        telos_value_new_object(markdown_keys, jsonl_values, 1);
 
-    assert(argc >= 19 && argc <= 25 && argc % 2 == 1);
+    assert(argc >= 19 && argc <= 27 && argc % 2 == 1);
     plugin_count = ((size_t)argc - 1) / 2;
     assert(descriptor >= 0);
+    assert(jsonl_descriptor >= 0);
     close(descriptor);
+    close(jsonl_descriptor);
     assert(telos_host_api_v1_initialize(&host, NULL, discard_log, NULL));
     registry = telos_registry_create(capabilities, 6, NULL);
     assert(registry != NULL);
@@ -215,6 +224,9 @@ int main(int argc, char **argv)
     verify_store(generation, plugin_ids[0], empty);
     verify_store(generation, plugin_ids[1], ring);
     verify_store(generation, plugin_ids[2], markdown);
+    if (plugin_count > 12) {
+        verify_store(generation, plugin_ids[12], jsonl);
+    }
     reject_store_configuration(generation, plugin_ids[0], capacity);
     reject_store_configuration(generation, plugin_ids[0], ring);
     reject_store_configuration(generation, plugin_ids[1], NULL);
@@ -342,6 +354,8 @@ int main(int argc, char **argv)
     telos_value_release(empty_path);
     telos_value_release(markdown);
     telos_value_release(path_value);
+    telos_value_release(jsonl);
+    telos_value_release(jsonl_path_value);
     telos_value_release(text_ring);
     telos_value_release(text_capacity);
     telos_value_release(zero_ring);
@@ -350,5 +364,6 @@ int main(int argc, char **argv)
     telos_value_release(capacity);
     telos_value_release(empty);
     unlink(path);
+    unlink(jsonl_path);
     return 0;
 }
