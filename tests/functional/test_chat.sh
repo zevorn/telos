@@ -101,6 +101,16 @@ printf 'login status\n/quit\n' | HOME="$temporary/home" \
     "$telos" chat >"$temporary/login-ready.output"
 grep -Fq "OpenAI is logged out" "$temporary/login-ready.output"
 
+printf '%s\n' 'login deepseek' 'login-status deepseek' \
+    'logout deepseek' 'login-status deepseek' '/quit' |
+    HOME="$temporary/home" TELOS_AGENT_PROVIDER=openai \
+    TELOS_AGENT_MODEL=unconfigured DEEPSEEK_API_KEY=functional-key \
+    "$telos" chat >"$temporary/provider-login.output"
+grep -Fq "DeepSeek login completed" "$temporary/provider-login.output"
+grep -Fq "DeepSeek is logged in" "$temporary/provider-login.output"
+grep -Fq "DeepSeek logout completed" "$temporary/provider-login.output"
+grep -Fq "DeepSeek is logged out" "$temporary/provider-login.output"
+
 printf '/login status\n/login\n/login status\n/logout\n/login status\n/quit\n' \
     | HOME="$temporary/home" TELOS_AGENT_PROVIDER=deepseek \
     TELOS_AGENT_MODEL=unconfigured DEEPSEEK_API_KEY=functional-key \
@@ -126,6 +136,9 @@ printf '[{"role":"user","content":"saved"}]\n' \
         '/compact' \
         '/scoped-models' \
         '/model openai/gpt-5' \
+        '/thinking high' \
+        '/thinking' \
+        '/model custom-local-model' \
         '/settings' \
         '/reload' \
         '/hotkeys' \
@@ -147,9 +160,12 @@ grep -Fq "session fork checkpoint saved" "$temporary/commands.output"
 grep -Fq "new session started" "$temporary/commands.output"
 grep -Fq "session checkpoint resumed" "$temporary/commands.output"
 grep -Fq "conversation compacted" "$temporary/commands.output"
-grep -Fq "provider=openai model=gpt-5 endpoint=http://127.0.0.1:1/v1" \
+grep -Fq "provider=openai model=custom-local-model thinking=off endpoint=http://127.0.0.1:1/v1" \
     "$temporary/commands.output"
 grep -Fq "Model set to openai/gpt-5" "$temporary/commands.output"
+grep -Fq "Thinking level set to high" "$temporary/commands.output"
+grep -Fq "thinking=high" "$temporary/commands.output"
+grep -Fq "Model set to openai/custom-local-model" "$temporary/commands.output"
 grep -Fq "runtime guidance reloaded" \
     "$temporary/commands.output"
 grep -Fq "Ctrl+J or Alt+Enter" "$temporary/commands.output"

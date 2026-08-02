@@ -1128,7 +1128,12 @@ static bool start_turn(struct terminal_state *state, const char *prompt,
         }
         return start_turn(state, command, error);
     }
-    if (strcmp(prompt, "logout") == 0 || strcmp(prompt, "login-status") == 0) {
+    if ((strncmp(prompt, "logout", sizeof("logout") - 1) == 0 &&
+         (prompt[sizeof("logout") - 1] == '\0' ||
+          prompt[sizeof("logout") - 1] == ' ')) ||
+        (strncmp(prompt, "login-status", sizeof("login-status") - 1) == 0 &&
+         (prompt[sizeof("login-status") - 1] == '\0' ||
+          prompt[sizeof("login-status") - 1] == ' '))) {
         char command[sizeof(state->input)];
 
         if (snprintf(command, sizeof(command), "/%s", prompt) >=
@@ -1463,11 +1468,22 @@ static bool complete_command(struct terminal_state *state)
 
 static void normalize_auth_command(char *line, size_t capacity)
 {
+    const bool login = line != NULL &&
+                       strncmp(line, "login", sizeof("login") - 1) == 0 &&
+                       (line[sizeof("login") - 1] == '\0' ||
+                        line[sizeof("login") - 1] == ' ');
+    const bool logout = line != NULL &&
+                        strncmp(line, "logout", sizeof("logout") - 1) == 0 &&
+                        (line[sizeof("logout") - 1] == '\0' ||
+                         line[sizeof("logout") - 1] == ' ');
+    const bool status = line != NULL &&
+                        strncmp(line, "login-status",
+                                sizeof("login-status") - 1) == 0 &&
+                        (line[sizeof("login-status") - 1] == '\0' ||
+                         line[sizeof("login-status") - 1] == ' ');
+
     if (line == NULL || capacity < 2 || line[0] == '/' ||
-        !((strncmp(line, "login", sizeof("login") - 1) == 0 &&
-           (line[sizeof("login") - 1] == '\0' ||
-            line[sizeof("login") - 1] == ' ')) ||
-          strcmp(line, "logout") == 0 || strcmp(line, "login-status") == 0)) {
+        !(login || logout || status)) {
         return;
     }
     if (strlen(line) + 2 > capacity) {

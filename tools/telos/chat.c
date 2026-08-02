@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 
 #include <errno.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +43,15 @@
 #define CHAT_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
 #define CHAT_SESSION_NAME_SIZE 128U
 #define CHAT_SESSION_DIRECTORY_SIZE CHAT_PATH_SIZE
+#define CHAT_THINKING_LEVEL_SIZE 16U
+#define CHAT_MODEL_ID_SIZE 256U
+#define CHAT_AUTHENTICATION_CAPACITY 4U
+
+struct chat_authentication_slot {
+    const char *provider;
+    const struct telos_authentication_definition_v1 *definition;
+    struct telos_authentication *authentication;
+};
 
 struct chat_session {
     const struct telos_authentication_definition_v1 *authentication_definition;
@@ -72,11 +82,18 @@ struct chat_session {
     struct telos_transport_header authentication_headers[4];
     struct telos_curl_transport_config transport;
     struct telos_model_catalog model_catalog;
+    char model_storage[TELOS_MODEL_CATALOG_CAPACITY][CHAT_MODEL_ID_SIZE];
     struct telos_command_registry commands;
     const struct telos_model_descriptor *selected_model;
     const char *configured_provider;
     const char *home_directory;
     const char *current_directory;
+    char authentication_directory[CHAT_PATH_SIZE];
+    const char *authentication_endpoint;
+    struct chat_authentication_slot authentications[
+        CHAT_AUTHENTICATION_CAPACITY];
+    size_t authentication_count;
+    char thinking_level[CHAT_THINKING_LEVEL_SIZE];
     char session_name[CHAT_SESSION_NAME_SIZE];
     struct telos_value *checkpoint[CHAT_MAXIMUM_MESSAGES];
     size_t checkpoint_count;
@@ -101,6 +118,9 @@ static struct telos_value *read_jsonl_session_file(const char *path,
 static bool persist_session_marker(struct chat_session *chat,
                                    const char *type,
                                    struct telos_error **error);
+static bool ensure_authentication(struct chat_session *chat,
+                                  const char *provider,
+                                  struct telos_error **error);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -283,7 +303,8 @@ static const char *canonical_provider(const char *provider)
     if (strcmp(provider, "openai-responses") == 0 ||
         strcmp(provider, "openai-chat") == 0 ||
         strcmp(provider, "dev.zevorn.openai-responses") == 0 ||
-        strcmp(provider, "dev.zevorn.openai-chat") == 0) {
+        strcmp(provider, "dev.zevorn.openai-chat") == 0 ||
+        strcmp(provider, "openai-codex") == 0) {
         return "openai";
     }
     if (strcmp(provider, "z.ai") == 0 || strcmp(provider, "z-ai") == 0 ||
@@ -294,6 +315,121 @@ static const char *canonical_provider(const char *provider)
         return "anthropic";
     }
     return provider;
+}
+
+static const struct telos_authentication_definition_v1 *
+authentication_definition_for(const char *provider)
+{
+    if (strcmp(provider, "openai") == 0) {
+        return telos_openai_codex_authentication_definition();
+    }
+    if (strcmp(provider, "deepseek") == 0) {
+        return telos_deepseek_api_key_authentication_definition();
+    }
+    if (strcmp(provider, "zai") == 0) {
+        return telos_zai_api_key_authentication_definition();
+    }
+    if (strcmp(provider, "anthropic") == 0) {
+        return telos_anthropic_api_key_authentication_definition();
+    }
+    return NULL;
+}
+
+static bool ensure_authentication(struct chat_session *chat,
+                                  const char *provider,
+                                  struct telos_error **error)
+{
+    const struct telos_authentication_definition_v1 *definition;
+    const char *canonical = canonical_provider(provider);
+
+    if (chat == NULL || canonical == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Authentication Provider is invalid");
+        return false;
+    }
+    for (size_t index = 0; index < chat->authentication_count; ++index) {
+        struct chat_authentication_slot *slot =
+            &chat->authentications[index];
+
+        if (strcmp(slot->provider, canonical) == 0) {
+            chat->authentication_definition = slot->definition;
+            chat->authentication = slot->authentication;
+            return true;
+        }
+    }
+    if (chat->authentication_count >= CHAT_AUTHENTICATION_CAPACITY) {
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, ENOSPC,
+                  "Authentication Provider capacity is exhausted");
+        return false;
+    }
+    definition = authentication_definition_for(canonical);
+    if (definition == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "Authentication Provider is not available");
+        return false;
+    }
+    {
+        const struct telos_authentication_config config = {
+            .state_directory = chat->authentication_directory,
+            .service_endpoint = chat->authentication_endpoint,
+            .send = telos_curl_transport_send,
+            .transport_context = &chat->transport,
+        };
+        struct telos_authentication *authentication = definition->create(
+            &config, error);
+
+        if (authentication == NULL) {
+            return false;
+        }
+        chat->authentications[chat->authentication_count++] =
+            (struct chat_authentication_slot){
+                .provider = canonical,
+                .definition = definition,
+                .authentication = authentication,
+            };
+        chat->authentication_definition = definition;
+        chat->authentication = authentication;
+    }
+    return true;
+}
+
+static enum telos_model_api model_api_for_provider(const char *provider)
+{
+    if (strcmp(provider, "openai") == 0) {
+        return TELOS_MODEL_API_OPENAI_RESPONSES;
+    }
+    if (strcmp(provider, "anthropic") == 0) {
+        return TELOS_MODEL_API_ANTHROPIC_MESSAGES;
+    }
+    return TELOS_MODEL_API_OPENAI_CHAT;
+}
+
+static bool copy_trimmed(const char *source, char *target, size_t capacity,
+                         struct telos_error **error)
+{
+    const char *start = source;
+    size_t size;
+
+    if (source == NULL || target == NULL || capacity == 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Text argument is invalid");
+        return false;
+    }
+    while (isspace((unsigned char)*start)) {
+        ++start;
+    }
+    size = strlen(start);
+    while (size > 0 && isspace((unsigned char)start[size - 1])) {
+        --size;
+    }
+    if (size >= capacity) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Text argument is too long");
+        return false;
+    }
+    memcpy(target, start, size);
+    target[size] = '\0';
+    return true;
 }
 
 static char *copy_text(const char *text)
@@ -1177,7 +1313,20 @@ static bool login_command(struct chat_session *chat,
             error)) {
         return false;
     }
-    return chat->model == NULL || create_provider(chat, error);
+    if (chat->model == NULL || chat->selected_model == NULL) {
+        return true;
+    }
+    for (size_t index = 0; index < chat->authentication_count; ++index) {
+        const struct chat_authentication_slot *slot =
+            &chat->authentications[index];
+
+        if (slot->authentication == chat->authentication) {
+            return strcmp(chat->selected_model->provider, slot->provider) !=
+                       0 ||
+                   create_provider(chat, error);
+        }
+    }
+    return true;
 }
 
 static bool logout_command(struct chat_session *chat,
@@ -1194,14 +1343,26 @@ static bool logout_command(struct chat_session *chat,
                                                   error)) {
         return false;
     }
-    if (chat->model != NULL && !create_provider(chat, error)) {
-        return false;
+    if (chat->model != NULL && chat->selected_model != NULL) {
+        for (size_t index = 0; index < chat->authentication_count; ++index) {
+            const struct chat_authentication_slot *slot =
+                &chat->authentications[index];
+
+            if (slot->authentication == chat->authentication &&
+                strcmp(slot->provider, chat->selected_model->provider) == 0 &&
+                !create_provider(chat, error)) {
+                return false;
+            }
+        }
     }
     {
         char message[128];
+        const char *provider = observer->provider == NULL
+                                   ? chat_provider_get(chat)
+                                   : observer->provider;
 
         if (snprintf(message, sizeof(message), "%s logout completed",
-                     provider_display_name(chat_provider_get(chat))) >=
+                     provider_display_name(provider)) >=
             (int)sizeof(message)) {
             set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                       "Authentication logout message is too long");
@@ -1218,6 +1379,9 @@ static bool login_status_command(const struct chat_session *chat,
 {
     struct telos_authentication_status status;
     char message[512];
+    const char *provider = observer->provider == NULL
+                               ? chat_provider_get((void *)chat)
+                               : observer->provider;
 
     if (chat->authentication_definition == NULL ||
         chat->authentication == NULL) {
@@ -1231,11 +1395,10 @@ static bool login_status_command(const struct chat_session *chat,
         return false;
     }
     if (status.state == TELOS_AUTHENTICATION_SIGNED_IN) {
-        if (strcmp(chat_provider_get((void *)chat), "openai") == 0) {
+        if (strcmp(canonical_provider(provider), "openai") == 0) {
             if (snprintf(message, sizeof(message),
                          "%s is logged in as account %s",
-                         provider_display_name(chat_provider_get(
-                             (void *)chat)),
+                         provider_display_name(provider),
                          status.account_id == NULL ? "unknown"
                                                    : status.account_id) >=
                 (int)sizeof(message)) {
@@ -1244,8 +1407,7 @@ static bool login_status_command(const struct chat_session *chat,
                 return false;
             }
         } else if (snprintf(message, sizeof(message), "%s is logged in",
-                            provider_display_name(chat_provider_get(
-                                (void *)chat))) >=
+                            provider_display_name(provider)) >=
                    (int)sizeof(message)) {
             set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                       "Authentication status message is too long");
@@ -1253,7 +1415,7 @@ static bool login_status_command(const struct chat_session *chat,
         }
     } else if (status.state == TELOS_AUTHENTICATION_AUTHORIZING) {
         if (snprintf(message, sizeof(message), "%s login is in progress",
-                     provider_display_name(chat_provider_get((void *)chat))) >=
+                     provider_display_name(provider)) >=
             (int)sizeof(message)) {
             set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                       "Authentication status message is too long");
@@ -1261,7 +1423,7 @@ static bool login_status_command(const struct chat_session *chat,
         }
     } else if (snprintf(
                    message, sizeof(message), "%s is logged out",
-                   provider_display_name(chat_provider_get((void *)chat))) >=
+                   provider_display_name(provider)) >=
                (int)sizeof(message)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                   "Authentication status message is too long");
@@ -1735,11 +1897,177 @@ static bool settings_command(const char *arguments,
 
     (void)arguments;
     (void)cancel;
-    if (snprintf(message, sizeof(message), "provider=%s model=%s endpoint=%s",
+    if (snprintf(message, sizeof(message),
+                 "provider=%s model=%s thinking=%s endpoint=%s",
                  chat_provider_get(chat), chat_model_get(chat),
-                 chat->configured_endpoint) >= (int)sizeof(message)) {
+                 chat->thinking_level, chat->configured_endpoint) >=
+        (int)sizeof(message)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                   "Settings summary is too long");
+        return false;
+    }
+    return emit_notice(emit, emit_context, message, error);
+}
+
+static bool replace_provider_options(struct chat_session *chat,
+                                     const char *key,
+                                     const struct telos_value *value,
+                                     struct telos_error **error)
+{
+    struct telos_value *options;
+
+    if (key != NULL && value == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Provider thinking option allocation failed");
+        return false;
+    }
+    if (key == NULL) {
+        options = telos_value_new_object(NULL, NULL, 0);
+    } else {
+        const char *keys[] = {key};
+        const struct telos_value *values[] = {value};
+
+        options = telos_value_new_object(keys, values, 1);
+    }
+    if (options == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Provider thinking options allocation failed");
+        return false;
+    }
+    telos_value_release(chat->provider_options);
+    chat->provider_options = options;
+    return true;
+}
+
+static bool thinking_level_valid(const char *level)
+{
+    static const char *const levels[] = {
+        "off", "minimal", "low", "medium", "high", "xhigh", "max",
+    };
+
+    for (size_t index = 0; index < sizeof(levels) / sizeof(levels[0]);
+         ++index) {
+        if (strcmp(level, levels[index]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int64_t thinking_budget(const char *level)
+{
+    if (strcmp(level, "minimal") == 0) {
+        return 1024;
+    }
+    if (strcmp(level, "low") == 0) {
+        return 2048;
+    }
+    if (strcmp(level, "medium") == 0) {
+        return 4096;
+    }
+    if (strcmp(level, "high") == 0) {
+        return 8192;
+    }
+    if (strcmp(level, "xhigh") == 0) {
+        return 16384;
+    }
+    return 32768;
+}
+
+static bool set_thinking_options(struct chat_session *chat,
+                                 const char *level,
+                                 struct telos_error **error)
+{
+    const struct telos_model_descriptor *model = chat->selected_model;
+    struct telos_value *value = NULL;
+    bool result;
+
+    if (strcmp(level, "off") == 0) {
+        return replace_provider_options(chat, NULL, NULL, error);
+    }
+    if (model == NULL ||
+        (model->capabilities & TELOS_MODEL_CAPABILITY_REASONING) == 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "The selected model does not support thinking levels");
+        return false;
+    }
+    if (model->api == TELOS_MODEL_API_OPENAI_RESPONSES) {
+        const char *keys[] = {"effort"};
+        struct telos_value *effort = telos_value_new_string(level);
+        const struct telos_value *values[] = {effort};
+
+        value = effort == NULL ? NULL : telos_value_new_object(keys, values, 1);
+        telos_value_release(effort);
+        result = replace_provider_options(chat, "reasoning", value, error);
+        telos_value_release(value);
+        return result;
+    }
+    if (model->api == TELOS_MODEL_API_ANTHROPIC_MESSAGES) {
+        const char *keys[] = {"type", "budget_tokens"};
+        struct telos_value *type = telos_value_new_string("enabled");
+        struct telos_value *budget = telos_value_new_integer(
+            thinking_budget(level));
+        const struct telos_value *values[] = {type, budget};
+
+        value = type == NULL || budget == NULL
+                    ? NULL
+                    : telos_value_new_object(keys, values, 2);
+        telos_value_release(budget);
+        telos_value_release(type);
+        result = replace_provider_options(chat, "thinking", value, error);
+        telos_value_release(value);
+        return result;
+    }
+    {
+        const char *keys[] = {"type"};
+        struct telos_value *type = telos_value_new_string("enabled");
+        const struct telos_value *values[] = {type};
+
+        value = type == NULL ? NULL : telos_value_new_object(keys, values, 1);
+        telos_value_release(type);
+        result = replace_provider_options(chat, "thinking", value, error);
+        telos_value_release(value);
+        return result;
+    }
+}
+
+static bool thinking_command(const char *arguments,
+                             const struct telos_cancel *cancel,
+                             telos_frontend_emit_fn emit,
+                             void *emit_context,
+                             void *context,
+                             struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char level[CHAT_THINKING_LEVEL_SIZE];
+    char message[128];
+
+    (void)cancel;
+    if (arguments == NULL || arguments[0] == '\0') {
+        if (snprintf(message, sizeof(message), "thinking=%s",
+                     chat->thinking_level) >= (int)sizeof(message)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Thinking status is too long");
+            return false;
+        }
+        return emit_notice(emit, emit_context, message, error);
+    }
+    if (!copy_trimmed(arguments, level, sizeof(level), error) ||
+        !thinking_level_valid(level)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Thinking level must be off, minimal, low, medium, high, "
+                  "xhigh, or max");
+        return false;
+    }
+    if (!set_thinking_options(chat, level, error)) {
+        return false;
+    }
+    memset(chat->thinking_level, 0, sizeof(chat->thinking_level));
+    memcpy(chat->thinking_level, level, strlen(level) + 1);
+    if (snprintf(message, sizeof(message), "Thinking level set to %s", level) >=
+        (int)sizeof(message)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Thinking status is too long");
         return false;
     }
     return emit_notice(emit, emit_context, message, error);
@@ -1820,11 +2148,19 @@ static bool model_command(const char *arguments,
         .emit_context = emit_context,
     };
     struct model_list_context list = {0};
+    char spec[TELOS_COMMAND_ARGUMENT_SIZE];
     char message[TELOS_COMMAND_ARGUMENT_SIZE];
     const struct telos_model_descriptor *model;
+    struct telos_error *selection_error = NULL;
 
     (void)cancel;
-    if (arguments == NULL || arguments[0] == '\0') {
+    if (arguments == NULL || arguments[0] == '\0' ||
+        !copy_trimmed(arguments, spec, sizeof(spec), error) ||
+        spec[0] == '\0') {
+        if (arguments != NULL && arguments[0] != '\0' &&
+            error != NULL && *error != NULL) {
+            return false;
+        }
         if (!telos_model_catalog_visit(&chat->model_catalog,
                                        append_model_list, &list, error)) {
             return false;
@@ -1836,9 +2172,76 @@ static bool model_command(const char *arguments,
         return emit_frontend(&observer, TELOS_FRONTEND_NOTICE, list.text,
                              NULL, error);
     }
-    if (!telos_model_catalog_select_spec(&chat->model_catalog, arguments,
-                                         error)) {
-        return false;
+    if (!telos_model_catalog_select_spec(&chat->model_catalog, spec,
+                                         &selection_error)) {
+        const char *provider = chat->selected_model == NULL
+                                   ? chat->configured_provider
+                                   : chat->selected_model->provider;
+        const char *model_id = spec;
+        char provider_name[64];
+        char *separator = strchr(spec, '/');
+        struct telos_model_descriptor custom;
+
+        if (selection_error == NULL ||
+            telos_error_code(selection_error) != ENOENT) {
+            if (error != NULL && *error == NULL) {
+                *error = selection_error;
+                selection_error = NULL;
+            }
+            telos_error_release(selection_error);
+            return false;
+        }
+        telos_error_release(selection_error);
+        selection_error = NULL;
+        if (separator != NULL) {
+            size_t provider_size = (size_t)(separator - spec);
+
+            if (provider_size == 0 || provider_size >= sizeof(provider_name) ||
+                separator[1] == '\0') {
+                set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                          "Model selection is invalid");
+                return false;
+            }
+            memcpy(provider_name, spec, provider_size);
+            provider_name[provider_size] = '\0';
+            provider = canonical_provider(provider_name);
+            model_id = separator + 1;
+        }
+        if (provider == NULL || provider[0] == '\0') {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                      "A Provider is required for a custom model");
+            return false;
+        }
+        provider = canonical_provider(provider);
+        if (strcmp(provider, "openai") != 0 &&
+            strcmp(provider, "deepseek") != 0 &&
+            strcmp(provider, "zai") != 0 &&
+            strcmp(provider, "anthropic") != 0) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                      "The selected Provider Plugin is not available");
+            return false;
+        }
+        if (strlen(model_id) >= CHAT_MODEL_ID_SIZE ||
+            chat->model_catalog.count >= TELOS_MODEL_CATALOG_CAPACITY) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Custom model identifier is too long");
+            return false;
+        }
+        memcpy(chat->model_storage[chat->model_catalog.count], model_id,
+               strlen(model_id) + 1);
+        custom = (struct telos_model_descriptor){
+            .provider = provider,
+            .id = chat->model_storage[chat->model_catalog.count],
+            .name = chat->model_storage[chat->model_catalog.count],
+            .api = model_api_for_provider(provider),
+            .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                            TELOS_MODEL_CAPABILITY_TOOLS,
+        };
+        if (!telos_model_catalog_add(&chat->model_catalog, &custom, error) ||
+            !telos_model_catalog_select(&chat->model_catalog, provider,
+                                        model_id, error)) {
+            return false;
+        }
     }
     model = telos_model_catalog_current(&chat->model_catalog);
     if (model == NULL) {
@@ -1848,7 +2251,17 @@ static bool model_command(const char *arguments,
     }
     chat->selected_model = model;
     chat->model = model->id;
-    if (!create_provider(chat, error)) {
+    chat->configured_provider = model->provider;
+    if ((model->capabilities & TELOS_MODEL_CAPABILITY_REASONING) == 0) {
+        if (!set_thinking_options(chat, "off", error)) {
+            return false;
+        }
+        memcpy(chat->thinking_level, "off", sizeof("off"));
+    } else if (!set_thinking_options(chat, chat->thinking_level, error)) {
+        return false;
+    }
+    if (!ensure_authentication(chat, model->provider, error) ||
+        !create_provider(chat, error)) {
         return false;
     }
     if (snprintf(message, sizeof(message), "Model set to %s/%s",
@@ -1877,16 +2290,38 @@ static bool login_command_handler(const char *arguments,
                                   void *emit_context, void *context,
                                   struct telos_error **error)
 {
+    struct chat_session *chat = context;
     struct observer_context observer = {
         .emit = emit,
         .emit_context = emit_context,
-        .provider = chat_provider_get(context),
+        .provider = chat_provider_get(chat),
     };
+    const struct telos_authentication_definition_v1 *saved_definition =
+        chat->authentication_definition;
+    struct telos_authentication *saved_authentication = chat->authentication;
+    char provider[64];
+    bool targeted = arguments != NULL && arguments[0] != '\0' &&
+                    strcmp(arguments, "status") != 0;
+    bool result;
 
     if (arguments != NULL && strcmp(arguments, "status") == 0) {
-        return login_status_command(context, &observer, error);
+        return login_status_command(chat, &observer, error);
     }
-    return login_command(context, cancel, &observer, error);
+    if (targeted) {
+        if (!copy_trimmed(arguments, provider, sizeof(provider), error) ||
+            !ensure_authentication(chat, canonical_provider(provider), error)) {
+            chat->authentication_definition = saved_definition;
+            chat->authentication = saved_authentication;
+            return false;
+        }
+        observer.provider = canonical_provider(provider);
+    }
+    result = login_command(chat, cancel, &observer, error);
+    if (targeted) {
+        chat->authentication_definition = saved_definition;
+        chat->authentication = saved_authentication;
+    }
+    return result;
 }
 
 static bool logout_command_handler(const char *arguments,
@@ -1895,15 +2330,35 @@ static bool logout_command_handler(const char *arguments,
                                    void *emit_context, void *context,
                                    struct telos_error **error)
 {
+    struct chat_session *chat = context;
     struct observer_context observer = {
         .emit = emit,
         .emit_context = emit_context,
-        .provider = chat_provider_get(context),
+        .provider = chat_provider_get(chat),
     };
+    const struct telos_authentication_definition_v1 *saved_definition =
+        chat->authentication_definition;
+    struct telos_authentication *saved_authentication = chat->authentication;
+    char provider[64];
+    bool targeted = arguments != NULL && arguments[0] != '\0';
+    bool result;
 
-    (void)arguments;
     (void)cancel;
-    return logout_command(context, &observer, error);
+    if (targeted) {
+        if (!copy_trimmed(arguments, provider, sizeof(provider), error) ||
+            !ensure_authentication(chat, canonical_provider(provider), error)) {
+            chat->authentication_definition = saved_definition;
+            chat->authentication = saved_authentication;
+            return false;
+        }
+        observer.provider = canonical_provider(provider);
+    }
+    result = logout_command(chat, &observer, error);
+    if (targeted) {
+        chat->authentication_definition = saved_definition;
+        chat->authentication = saved_authentication;
+    }
+    return result;
 }
 
 static bool login_status_command_handler(const char *arguments,
@@ -1912,15 +2367,35 @@ static bool login_status_command_handler(const char *arguments,
                                          void *emit_context, void *context,
                                          struct telos_error **error)
 {
+    struct chat_session *chat = context;
     struct observer_context observer = {
         .emit = emit,
         .emit_context = emit_context,
-        .provider = chat_provider_get(context),
+        .provider = chat_provider_get(chat),
     };
+    const struct telos_authentication_definition_v1 *saved_definition =
+        chat->authentication_definition;
+    struct telos_authentication *saved_authentication = chat->authentication;
+    char provider[64];
+    bool targeted = arguments != NULL && arguments[0] != '\0';
+    bool result;
 
-    (void)arguments;
     (void)cancel;
-    return login_status_command(context, &observer, error);
+    if (targeted) {
+        if (!copy_trimmed(arguments, provider, sizeof(provider), error) ||
+            !ensure_authentication(chat, canonical_provider(provider), error)) {
+            chat->authentication_definition = saved_definition;
+            chat->authentication = saved_authentication;
+            return false;
+        }
+        observer.provider = canonical_provider(provider);
+    }
+    result = login_status_command(chat, &observer, error);
+    if (targeted) {
+        chat->authentication_definition = saved_definition;
+        chat->authentication = saved_authentication;
+    }
+    return result;
 }
 
 static bool chat_turn(const char *input, const struct telos_cancel *cancel,
@@ -2004,6 +2479,12 @@ static bool register_chat_commands(struct chat_session *chat,
             .name = "model",
             .help = "list or select a model",
             .run = model_command,
+            .context = chat,
+        },
+        {
+            .name = "thinking",
+            .help = "show or set the thinking level",
+            .run = thinking_command,
             .context = chat,
         },
         {
@@ -2199,10 +2680,10 @@ static bool initialize_chat(struct chat_session *chat,
     const char *endpoint = telos_config_get(config, "agent.endpoint");
     const char *authentication_endpoint =
         getenv("TELOS_OPENAI_AUTH_ENDPOINT");
-    char authentication_directory[CHAT_PATH_SIZE];
 
     chat->home_directory = home_directory;
     chat->current_directory = current_directory;
+    memcpy(chat->thinking_level, "off", sizeof("off"));
     if (!initialize_session_store(chat, home_directory, error)) {
         return false;
     }
@@ -2233,39 +2714,17 @@ static bool initialize_chat(struct chat_session *chat,
     chat->configured_endpoint = endpoint;
     chat->transport.timeout_milliseconds =
         TELOS_CURL_DEFAULT_TIMEOUT_MILLISECONDS;
-    if (snprintf(authentication_directory, sizeof(authentication_directory),
-                 "%s/.telos", home_directory) >=
-        (int)sizeof(authentication_directory)) {
+    if (snprintf(chat->authentication_directory,
+                 sizeof(chat->authentication_directory), "%s/.telos",
+                 home_directory) >=
+        (int)sizeof(chat->authentication_directory)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
                   "Agent authentication state path is too long");
         return false;
     }
-    if (strcmp(chat->configured_provider, "openai") == 0) {
-        chat->authentication_definition =
-            telos_openai_codex_authentication_definition();
-    } else if (strcmp(chat->configured_provider, "deepseek") == 0) {
-        chat->authentication_definition =
-            telos_deepseek_api_key_authentication_definition();
-    } else if (strcmp(chat->configured_provider, "zai") == 0) {
-        chat->authentication_definition =
-            telos_zai_api_key_authentication_definition();
-    } else if (strcmp(chat->configured_provider, "anthropic") == 0) {
-        chat->authentication_definition =
-            telos_anthropic_api_key_authentication_definition();
-    }
-    if (chat->authentication_definition != NULL) {
-        const struct telos_authentication_config authentication_config = {
-            .state_directory = authentication_directory,
-            .service_endpoint = authentication_endpoint,
-            .send = telos_curl_transport_send,
-            .transport_context = &chat->transport,
-        };
-
-        chat->authentication = chat->authentication_definition->create(
-            &authentication_config, error);
-        if (chat->authentication == NULL) {
-            return false;
-        }
+    chat->authentication_endpoint = authentication_endpoint;
+    if (!ensure_authentication(chat, chat->configured_provider, error)) {
+        return false;
     }
     chat->secret_broker = telos_secret_broker_create(resolve_secret, chat,
                                                       error);
@@ -2337,8 +2796,11 @@ static void clear_chat(struct chat_session *chat)
     }
     telos_event_store_destroy(chat->session_store);
     telos_secret_broker_destroy(chat->secret_broker);
-    if (chat->authentication_definition != NULL) {
-        chat->authentication_definition->destroy(chat->authentication);
+    for (size_t index = 0; index < chat->authentication_count; ++index) {
+        const struct chat_authentication_slot *slot =
+            &chat->authentications[index];
+
+        slot->definition->destroy(slot->authentication);
     }
 }
 
