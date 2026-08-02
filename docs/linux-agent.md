@@ -131,6 +131,11 @@ OpenAI device login, `/login status` shows the current account state, and
 `logout` or `/logout` removes the cached session. When stdin or stdout is not
 a terminal, the Frontend automatically uses a plain line-oriented format.
 
+Use `/export PATH` to write the current bounded conversation as JSON and
+`/resume PATH` to validate and restore that file. `/fork` and `/clone` keep an
+in-process checkpoint for quick branching, while `/resume` without a path
+returns to that checkpoint.
+
 ## Resource bounds
 
 The terminal Frontend makes one bounded session allocation. Input and recalled
