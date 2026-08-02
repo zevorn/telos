@@ -6,6 +6,8 @@
 #include <telos/cancel.h>
 #include <telos/error.h>
 
+struct telos_command_registry;
+
 enum telos_frontend_event_kind {
     TELOS_FRONTEND_RESPONSE_STARTED = 1,
     TELOS_FRONTEND_TEXT_DELTA,
@@ -40,6 +42,10 @@ struct telos_frontend_session {
     const char *working_directory;
     const char *command_help;
     const char *initial_prompt;
+    const struct telos_command_registry *commands;
+    const char *(*provider_get)(void *context);
+    const char *(*model_get)(void *context);
+    void *identity_context;
     bool single_turn;
     telos_frontend_turn_fn turn;
     void *turn_context;

@@ -16,6 +16,7 @@
 #include <wchar.h>
 
 #include <telos/plugins/terminal_frontend.h>
+#include <telos/command.h>
 
 #define TERMINAL_EVENT_CAPACITY 64U
 #define TERMINAL_EVENT_TEXT_SIZE 2048U
@@ -92,6 +93,9 @@ struct plain_context {
     int output_descriptor;
     bool response_started;
 };
+
+static bool plain_emit(const struct telos_frontend_event *event,
+                       void *context, struct telos_error **error);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -471,8 +475,16 @@ static bool write_footer(struct terminal_state *state, size_t columns,
     size_t size;
 
     sanitize_label(working, sizeof(working), state->session->working_directory);
-    sanitize_label(provider, sizeof(provider), state->session->provider);
-    sanitize_label(model, sizeof(model), state->session->model);
+    sanitize_label(provider, sizeof(provider),
+                   state->session->provider_get == NULL
+                       ? state->session->provider
+                       : state->session->provider_get(
+                             state->session->identity_context));
+    sanitize_label(model, sizeof(model),
+                   state->session->model_get == NULL
+                       ? state->session->model
+                       : state->session->model_get(
+                             state->session->identity_context));
     snprintf(visible, sizeof(visible), "%s · %s/%s · %s", working, provider,
              model,
              state->worker_active
@@ -812,6 +824,22 @@ static void show_help(struct terminal_state *state)
                "  /help   show this help\r\n"
                "  /clear  clear the Agent conversation\r\n"
                "  /quit   leave Telos\r\n");
+    if (state->session->commands != NULL) {
+        for (size_t index = 0;
+             index < state->session->commands->count; ++index) {
+            const struct telos_command *command =
+                &state->session->commands->commands[index];
+
+            write_text(state->output_descriptor, "  /");
+            write_sanitized(state, command->name, strlen(command->name));
+            if (command->help != NULL && command->help[0] != '\0') {
+                write_text(state->output_descriptor, "  ");
+                write_sanitized(state, command->help,
+                                strlen(command->help));
+            }
+            write_text(state->output_descriptor, "\r\n");
+        }
+    }
     if (state->session->command_help != NULL &&
         state->session->command_help[0] != '\0') {
         write_text(state->output_descriptor, "  ");
@@ -829,6 +857,9 @@ static void show_help(struct terminal_state *state)
 static bool start_turn(struct terminal_state *state, const char *prompt,
                        struct telos_error **error)
 {
+    struct telos_error *command_error = NULL;
+    bool handled = false;
+    bool exit_requested = false;
     int result;
 
     if (strcmp(prompt, "/quit") == 0 || strcmp(prompt, "/exit") == 0) {
@@ -838,6 +869,42 @@ static bool start_turn(struct terminal_state *state, const char *prompt,
     if (strcmp(prompt, "/help") == 0) {
         show_help(state);
         return true;
+    }
+    if (state->session->commands != NULL && prompt[0] == '/') {
+        if (!telos_command_registry_dispatch(
+                state->session->commands, prompt, NULL, queue_frontend_event,
+                state, &handled, &exit_requested, &command_error)) {
+            if (command_error != NULL &&
+                telos_error_code(command_error) == ENOENT) {
+                char message[TELOS_COMMAND_ARGUMENT_SIZE];
+
+                if (snprintf(message, sizeof(message),
+                             "Unknown command: %s", prompt) >=
+                    (int)sizeof(message)) {
+                    telos_error_release(command_error);
+                    set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                              "Unknown command is too long");
+                    return false;
+                }
+                telos_error_release(command_error);
+                return queue_frontend_event(
+                    &(const struct telos_frontend_event){
+                        .kind = TELOS_FRONTEND_NOTICE,
+                        .text = message,
+                    },
+                    state, error);
+            }
+            if (error != NULL && *error == NULL) {
+                *error = command_error;
+                command_error = NULL;
+            }
+            telos_error_release(command_error);
+            return false;
+        }
+        if (handled) {
+            state->exit_requested = state->exit_requested || exit_requested;
+            return true;
+        }
     }
     if (state->worker_active) {
         if (state->prompt_queued) {
@@ -1212,8 +1279,16 @@ static void write_header(struct terminal_state *state)
     sanitize_label(application, sizeof(application),
                    state->session->application);
     sanitize_label(version, sizeof(version), state->session->version);
-    sanitize_label(provider, sizeof(provider), state->session->provider);
-    sanitize_label(model, sizeof(model), state->session->model);
+    sanitize_label(provider, sizeof(provider),
+                   state->session->provider_get == NULL
+                       ? state->session->provider
+                       : state->session->provider_get(
+                             state->session->identity_context));
+    sanitize_label(model, sizeof(model),
+                   state->session->model_get == NULL
+                       ? state->session->model
+                       : state->session->model_get(
+                             state->session->identity_context));
     if (state->color) {
         write_text(state->output_descriptor, "\033[1;38;5;75m");
     }
@@ -1440,6 +1515,21 @@ static bool run_plain(struct terminal_state *state, struct telos_error **error)
         if (strcmp(line, "/help") == 0) {
             write_text(state->output_descriptor,
                        "/help /clear /quit\n");
+            if (state->session->commands != NULL) {
+                for (size_t index = 0;
+                     index < state->session->commands->count; ++index) {
+                    const struct telos_command *command =
+                        &state->session->commands->commands[index];
+
+                    write_text(state->output_descriptor, "/");
+                    plain_write_sanitized(state->output_descriptor,
+                                          command->name);
+                    write_text(state->output_descriptor, " ");
+                    plain_write_sanitized(state->output_descriptor,
+                                          command->help);
+                    write_text(state->output_descriptor, "\n");
+                }
+            }
             if (state->session->command_help != NULL &&
                 state->session->command_help[0] != '\0') {
                 plain_write_sanitized(state->output_descriptor,
@@ -1447,6 +1537,41 @@ static bool run_plain(struct terminal_state *state, struct telos_error **error)
                 write_text(state->output_descriptor, "\n");
             }
             continue;
+        }
+        if (state->session->commands != NULL && line[0] == '/') {
+            struct plain_context command_context = {
+                .output_descriptor = state->output_descriptor,
+            };
+            struct telos_error *command_error = NULL;
+            bool handled = false;
+            bool exit_requested = false;
+
+            if (!telos_command_registry_dispatch(
+                    state->session->commands, line, NULL, plain_emit,
+                    &command_context, &handled, &exit_requested,
+                    &command_error)) {
+                if (command_error != NULL &&
+                    telos_error_code(command_error) == ENOENT) {
+                    write_text(state->output_descriptor,
+                               "[notice] Unknown command: ");
+                    plain_write_sanitized(state->output_descriptor, line);
+                    write_text(state->output_descriptor, "\n");
+                    telos_error_release(command_error);
+                    continue;
+                }
+                if (error != NULL && *error == NULL) {
+                    *error = command_error;
+                    command_error = NULL;
+                }
+                telos_error_release(command_error);
+                return false;
+            }
+            if (handled) {
+                if (exit_requested) {
+                    return true;
+                }
+                continue;
+            }
         }
         if (!run_plain_turn(state, line, error)) {
             return false;
