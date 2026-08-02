@@ -187,6 +187,54 @@ static bool read_until(int descriptor, char *output, size_t capacity,
     return false;
 }
 
+static bool wait_for_exit(int descriptor, pid_t child, int *status)
+{
+    char output[4096];
+    size_t attempts = 0;
+
+    while (attempts < 500) {
+        struct pollfd poll_descriptor = {
+            .fd = descriptor,
+            .events = POLLIN,
+        };
+        pid_t result = waitpid(child, status, WNOHANG);
+        int ready;
+
+        if (result == child) {
+            return true;
+        }
+        if (result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        ready = poll(&poll_descriptor, 1, 20);
+        if (ready < 0 && errno == EINTR) {
+            continue;
+        }
+        if (ready < 0) {
+            return false;
+        }
+        if (ready > 0 &&
+            (poll_descriptor.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
+            ssize_t size = read(descriptor, output, sizeof(output));
+
+            if (size < 0 && errno != EINTR && errno != EIO) {
+                return false;
+            }
+            if (size == 0 || (size < 0 && errno == EIO)) {
+                do {
+                    result = waitpid(child, status, 0);
+                } while (result < 0 && errno == EINTR);
+                return result == child;
+            }
+        }
+        ++attempts;
+    }
+    return false;
+}
+
 static void run_exit_scenario(const struct telos_frontend_session *session,
                               unsigned short columns, const char *term,
                               bool no_color, const char *keys,
@@ -257,7 +305,7 @@ static void run_exit_scenario(const struct telos_frontend_session *session,
     }
     memset(output, 0, sizeof(output));
     assert(read_until(master, output, sizeof(output), "\033[?2004l"));
-    assert(waitpid(child, &status, 0) == child);
+    assert(wait_for_exit(master, child, &status));
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
     close(master);
@@ -382,7 +430,7 @@ int main(void)
     memset(output, 0, sizeof(output));
     assert(write(master, "/quit\r", 6) == 6);
     assert(read_until(master, output, sizeof(output), "\033[?2004l"));
-    assert(waitpid(child, &status, 0) == child);
+    assert(wait_for_exit(master, child, &status));
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
     close(master);
