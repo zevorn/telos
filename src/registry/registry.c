@@ -421,7 +421,7 @@ static bool descriptor_valid(const struct telos_registry *registry,
     if (descriptor->id == NULL || descriptor->id[0] == '\0' ||
         descriptor->plugin_id == NULL || descriptor->plugin_id[0] == '\0' ||
         descriptor->kind < TELOS_EXTENSION_PROVIDER ||
-        descriptor->kind > TELOS_EXTENSION_PROMPT) {
+        descriptor->kind > TELOS_EXTENSION_AUTHENTICATION) {
         return false;
     }
     for (size_t index = 0; index < descriptor->required_capability_count;
