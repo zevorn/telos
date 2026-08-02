@@ -1,5 +1,6 @@
 subdir('stores')
 subdir('providers')
+subdir('models')
 subdir('resources')
 subdir('context-sources')
 
@@ -25,6 +26,7 @@ telos_official_plugin_deps = [
     telos_ring_store_plugin_dep,
     telos_markdown_store_plugin_dep,
     telos_openai_responses_plugin_dep,
+    telos_model_catalog_plugin_dep,
     telos_agent_skills_plugin_dep,
     telos_project_guidance_plugin_dep,
 ]

@@ -195,6 +195,18 @@ foreach entry : openai_plugin_tests
     test(entry[0], plugin_test, suite: 'plugins')
 endforeach
 
+test_model_catalog = executable(
+    'test-model-catalog',
+    'test_model_catalog.c',
+    dependencies: telos_model_catalog_plugin_dep,
+)
+
+test(
+    'model-catalog',
+    test_model_catalog,
+    suite: 'plugins',
+)
+
 if posix_host_plugins_available
     test_openai_codex_auth = executable(
         'test-openai-codex-auth',
@@ -406,6 +418,11 @@ if get_option('shared_plugins')
             meson.project_source_root() / 'plugins/transports/curl',
         ]
     endif
+    official_plugin_modules += [telos_model_catalog_module]
+    official_plugin_module_paths += [telos_model_catalog_module.full_path()]
+    official_plugin_source_paths += [
+        meson.project_source_root() / 'plugins/models/catalog',
+    ]
 
     test_official_plugins = executable(
         'test-official-plugins',

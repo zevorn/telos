@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <telos/manifest.h>
+#include <telos/model.h>
 #include <telos/plugin.h>
 #include <telos/authentication.h>
 #include <telos/frontend.h>
@@ -159,11 +160,12 @@ int main(int argc, char **argv)
         "dev.zevorn.agent-skills",   "dev.zevorn.project-guidance",
         "dev.zevorn.openai-codex-auth",
         "dev.zevorn.terminal-frontend", "dev.zevorn.curl-transport",
+        "dev.zevorn.model-catalog",
     };
     size_t plugin_count;
     struct telos_registry *registry;
     struct telos_host_api_v1 host;
-    struct telos_plugin_module *modules[9] = {0};
+    struct telos_plugin_module *modules[10] = {0};
     struct telos_registry_generation *generation;
     struct telos_value *empty = telos_value_new_object(NULL, NULL, 0);
     struct telos_value *capacity = telos_value_new_integer(2);
@@ -191,7 +193,7 @@ int main(int argc, char **argv)
     struct telos_value *invalid_markdown =
         telos_value_new_object(markdown_keys, empty_path_values, 1);
 
-    assert(argc >= 13 && argc <= 19 && argc % 2 == 1);
+    assert(argc >= 15 && argc <= 21 && argc % 2 == 1);
     plugin_count = ((size_t)argc - 1) / 2;
     assert(descriptor >= 0);
     close(descriptor);
@@ -291,6 +293,22 @@ int main(int argc, char **argv)
         assert(definition->struct_size >= sizeof(*definition));
         assert(strcmp(definition->id, plugin_ids[8]) == 0);
         assert(definition->send != NULL);
+    }
+    if (plugin_count > 9) {
+        const struct telos_extension_descriptor *catalog = find_extension(
+            generation, TELOS_EXTENSION_MODEL_CATALOG, plugin_ids[9]);
+        const struct telos_model_catalog_definition_v1 *definition =
+            catalog->implementation;
+        struct telos_model_catalog models;
+
+        assert(definition->struct_size >= sizeof(*definition));
+        assert(strcmp(definition->id, plugin_ids[9]) == 0);
+        assert(definition->add != NULL);
+        telos_model_catalog_initialize(&models);
+        assert(definition->add(&models, NULL));
+        assert(telos_model_catalog_current(&models) == NULL);
+        assert(telos_model_catalog_find(&models, "openai", "gpt-5") !=
+               NULL);
     }
 
     telos_registry_generation_release(generation);
