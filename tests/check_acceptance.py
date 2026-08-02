@@ -81,6 +81,9 @@ def main() -> int:
     if missing_suites:
         errors.append(f"configured test suites are missing: {missing_suites}")
 
+    verification = manifest.get("verification", {})
+    conditional_tests = set(verification.get("conditional_tests", []))
+
     for criterion in sorted(criteria):
         mapped_tests = criteria[criterion].get("tests", [])
         external = criteria[criterion].get("external", [])
@@ -88,16 +91,28 @@ def main() -> int:
             errors.append(f"{criterion} has no automated test mapping")
         if not mapped_tests and not external:
             errors.append(f"{criterion} has no verification mapping")
-        missing_tests = sorted(set(mapped_tests) - set(tests))
+        missing_tests = sorted(
+            set(mapped_tests) - set(tests) - conditional_tests
+        )
         if missing_tests:
             errors.append(
                 f"{criterion} names unconfigured tests: {missing_tests}"
             )
 
-    verification = manifest.get("verification", {})
     manual = verification.get("manual", [])
     if manual != ["credentialed-openai-responses-smoke"]:
         errors.append("manual remote-provider smoke mapping is missing")
+    mapped_names = {
+        name
+        for entry in criteria.values()
+        for name in entry.get("tests", [])
+    }
+    unknown_conditional = sorted(conditional_tests - mapped_names)
+    if unknown_conditional:
+        errors.append(
+            "verification names unknown conditional tests: "
+            f"{unknown_conditional}"
+        )
 
     if arguments.test_log is not None:
         approved = set(verification.get("approved_skips", []))

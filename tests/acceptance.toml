@@ -1,6 +1,8 @@
 [verification]
 approved_skips = []
 manual = ["credentialed-openai-responses-smoke"]
+# linux-platform is registered only by a Linux Meson host configuration.
+conditional_tests = ["linux-platform"]
 
 [criteria.AC-1]
 tests = ["build-contract", "sdk-contract", "linux-platform"]
