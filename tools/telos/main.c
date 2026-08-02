@@ -26,6 +26,7 @@
 struct cli_options {
     bool json;
     bool rpc;
+    bool continue_session;
     bool yes;
     const char *state_directory;
     const char *builder;
@@ -53,6 +54,7 @@ static void usage(FILE *stream)
           "  --json                 Emit machine-readable JSON\n"
           "  --mode MODE            interactive, json, or rpc\n"
           "  --rpc                  Use JSONL RPC input/output\n"
+          "  --continue              Resume the newest saved session\n"
           "  --yes                  Approve an inspected installation plan\n"
           "  --state-dir PATH       Override state.directory\n"
           "  --provider ID          Override agent.provider\n"
@@ -560,6 +562,7 @@ static int agent_command(const struct cli_options *options,
 
     if (telos_chat_run(config, home_directory, current_directory,
                        initial_prompt, single_turn, options->json, options->rpc,
+                       options->continue_session,
                        &error)) {
         return 0;
     }
@@ -689,6 +692,9 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[index], "--rpc") == 0) {
             options.json = true;
             options.rpc = true;
+            index += 1;
+        } else if (strcmp(argv[index], "--continue") == 0) {
+            options.continue_session = true;
             index += 1;
         } else if (index + 1 < argc &&
                    strcmp(argv[index], "--mode") == 0) {

@@ -160,6 +160,12 @@ grep -Fq "session exported" "$temporary/commands.output"
 grep -Fq "session resumed" "$temporary/commands.output"
 test -s "$temporary/export.json"
 test -s "$temporary/share.json"
+printf '/session\n/quit\n' | HOME="$temporary/home" \
+    TELOS_AGENT_MODEL=unconfigured \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" --continue chat >"$temporary/continue.output"
+grep -Fq "session " "$temporary/continue.output"
+grep -Fq "messages" "$temporary/continue.output"
 session_file=$(find "$temporary/home/.telos/sessions" -type f \
     -name '*.jsonl' | sed -n '1p')
 test -n "$session_file"

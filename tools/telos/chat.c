@@ -1462,6 +1462,70 @@ static bool sessions_command(const char *arguments,
     return emit_notice(emit, emit_context, text, error);
 }
 
+static bool load_latest_session(struct chat_session *chat,
+                                struct telos_error **error)
+{
+    char directory[CHAT_PATH_SIZE];
+    char latest[CHAT_PATH_SIZE] = {0};
+    const char *separator = strrchr(chat->session_path, '/');
+    struct stat latest_status = {0};
+    DIR *stream;
+    struct dirent *entry;
+    bool found = false;
+    struct telos_value *items;
+
+    if (separator == NULL ||
+        (size_t)(separator - chat->session_path) >= sizeof(directory)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Session directory is invalid");
+        return false;
+    }
+    memcpy(directory, chat->session_path,
+           (size_t)(separator - chat->session_path));
+    directory[separator - chat->session_path] = '\0';
+    stream = opendir(directory);
+    if (stream == NULL) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Session directory could not be opened");
+        return false;
+    }
+    while ((entry = readdir(stream)) != NULL) {
+        char path[CHAT_PATH_SIZE];
+        struct stat status;
+        size_t name_size = strlen(entry->d_name);
+
+        if (name_size < sizeof(".jsonl") - 1 ||
+            strcmp(entry->d_name + name_size - (sizeof(".jsonl") - 1),
+                   ".jsonl") != 0 ||
+            strcmp(entry->d_name, separator + 1) == 0 ||
+            snprintf(path, sizeof(path), "%s/%s", directory,
+                     entry->d_name) >= (int)sizeof(path) ||
+            stat(path, &status) != 0 || !S_ISREG(status.st_mode)) {
+            continue;
+        }
+        if (!found || status.st_mtime > latest_status.st_mtime) {
+            memcpy(latest, path, strlen(path) + 1);
+            latest_status = status;
+            found = true;
+        }
+    }
+    closedir(stream);
+    if (!found) {
+        return true;
+    }
+    items = read_session_file(latest, error);
+    if (items == NULL || !replace_messages(chat, items, error)) {
+        telos_value_release(items);
+        return false;
+    }
+    telos_value_release(items);
+    return persist_session_snapshot(chat, error) &&
+           checkpoint_messages(chat, error);
+}
+
 static bool tree_command(const char *arguments,
                          const struct telos_cancel *cancel,
                          telos_frontend_emit_fn emit,
@@ -2285,6 +2349,7 @@ bool telos_chat_run(const struct telos_config *config,
                     bool single_turn,
                     bool json_output,
                     bool rpc_mode,
+                    bool continue_session,
                     struct telos_error **error)
 {
     struct chat_session chat = {0};
@@ -2305,6 +2370,10 @@ bool telos_chat_run(const struct telos_config *config,
     }
     if (!initialize_chat(&chat, config, home_directory, current_directory,
                          error)) {
+        clear_chat(&chat);
+        return false;
+    }
+    if (continue_session && !load_latest_session(&chat, error)) {
         clear_chat(&chat);
         return false;
     }

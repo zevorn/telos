@@ -12,6 +12,7 @@ bool telos_chat_run(const struct telos_config *config,
                     bool single_turn,
                     bool json_output,
                     bool rpc_mode,
+                    bool continue_session,
                     struct telos_error **error);
 
 #endif
