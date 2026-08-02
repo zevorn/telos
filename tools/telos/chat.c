@@ -10,11 +10,15 @@
 
 #include <telos/agent.h>
 #include <telos/authentication.h>
+#include <telos/clock.h>
 #include <telos/command.h>
+#include <telos/event.h>
+#include <telos/id.h>
 #include <telos/model.h>
 #include <telos/plugins/anthropic.h>
 #include <telos/plugins/api_key_auth.h>
 #include <telos/plugins/curl_transport.h>
+#include <telos/plugins/jsonl_store.h>
 #include <telos/plugins/model_catalog.h>
 #include <telos/plugins/openai_codex_auth.h>
 #include <telos/plugins/openai_chat.h>
@@ -25,6 +29,7 @@
 #include <telos/prompt.h>
 #include <telos/registry.h>
 #include <telos/secret.h>
+#include <telos/store.h>
 #include <telos/tool.h>
 #include <telos/value.h>
 
@@ -35,6 +40,7 @@
 #define CHAT_MAXIMUM_CONVERSATION_BYTES (4U * 1024U * 1024U)
 #define CHAT_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
 #define CHAT_SESSION_NAME_SIZE 128U
+#define CHAT_SESSION_DIRECTORY_SIZE CHAT_PATH_SIZE
 
 struct chat_session {
     const struct telos_authentication_definition_v1 *authentication_definition;
@@ -50,6 +56,10 @@ struct chat_session {
     struct telos_prompt_snapshot *prompt;
     struct telos_value *tools;
     struct telos_value *provider_options;
+    struct telos_event_store *session_store;
+    struct telos_id session_id;
+    uint64_t session_sequence;
+    char session_path[CHAT_SESSION_DIRECTORY_SIZE];
     struct telos_value *messages[CHAT_MAXIMUM_MESSAGES];
     size_t message_sizes[CHAT_MAXIMUM_MESSAGES];
     size_t message_count;
@@ -85,6 +95,11 @@ static bool create_prompt(struct chat_session *chat,
                           struct telos_error **error);
 static bool find_project_root(const char *current_directory,
                               char root[CHAT_PATH_SIZE]);
+static struct telos_value *read_jsonl_session_file(const char *path,
+                                                   struct telos_error **error);
+static bool persist_session_marker(struct chat_session *chat,
+                                   const char *type,
+                                   struct telos_error **error);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -94,6 +109,129 @@ static void set_error(struct telos_error **error,
     if (error != NULL && *error == NULL) {
         *error = telos_error_create(domain, code, message, NULL);
     }
+}
+
+static bool make_directory(const char *path, struct telos_error **error)
+{
+    if (mkdir(path, 0700) != 0 && errno != EEXIST) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Session directory could not be created");
+        return false;
+    }
+    return true;
+}
+
+static bool initialize_session_store(struct chat_session *chat,
+                                     const char *home_directory,
+                                     struct telos_error **error)
+{
+    char directory[CHAT_SESSION_DIRECTORY_SIZE];
+    char identifier[TELOS_ID_TEXT_SIZE];
+
+    chat->session_id = telos_id_generate();
+    if (!telos_id_format(chat->session_id, identifier, sizeof(identifier)) ||
+        snprintf(directory, sizeof(directory), "%s/.telos", home_directory) >=
+            (int)sizeof(directory) ||
+        !make_directory(directory, error) ||
+        snprintf(directory, sizeof(directory), "%s/.telos/sessions",
+                 home_directory) >= (int)sizeof(directory) ||
+        !make_directory(directory, error) ||
+        snprintf(chat->session_path, sizeof(chat->session_path),
+                 "%s/%s.jsonl", directory, identifier) >=
+            (int)sizeof(chat->session_path)) {
+        if (error != NULL && *error == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
+                      "Session path is too long");
+        }
+        return false;
+    }
+    chat->session_store = telos_jsonl_store_create(chat->session_path, error);
+    if (chat->session_store == NULL) {
+        return false;
+    }
+    chat->session_sequence = telos_event_store_count(chat->session_store);
+    return true;
+}
+
+static bool persist_session_value(struct chat_session *chat,
+                                  const char *type,
+                                  const struct telos_value *payload,
+                                  struct telos_error **error)
+{
+    struct telos_id event_id;
+    struct telos_event_spec spec;
+    struct telos_event *event;
+    struct telos_clock clock = telos_system_clock();
+    struct telos_error *clock_error = NULL;
+    int64_t timestamp = 0;
+    bool result;
+
+    if (chat->session_store == NULL) {
+        return true;
+    }
+    if (!telos_clock_now_milliseconds(&clock, &timestamp, &clock_error)) {
+        if (error != NULL && *error == NULL) {
+            *error = clock_error;
+            clock_error = NULL;
+        }
+        telos_error_release(clock_error);
+        return false;
+    }
+    event_id = telos_id_generate();
+    spec = (struct telos_event_spec){
+        .sequence = ++chat->session_sequence,
+        .event_id = event_id,
+        .session_id = chat->session_id,
+        .correlation_id = event_id,
+        .causation_id = event_id,
+        .type = type,
+        .source = "telos-terminal",
+        .timestamp_milliseconds = timestamp,
+        .payload = payload,
+    };
+    event = telos_event_create(&spec, error);
+    if (event == NULL) {
+        --chat->session_sequence;
+        return false;
+    }
+    result = telos_event_store_append(chat->session_store, event, error);
+    telos_event_release(event);
+    if (!result) {
+        --chat->session_sequence;
+    }
+    return result;
+}
+
+static bool persist_session_marker(struct chat_session *chat,
+                                   const char *type,
+                                   struct telos_error **error)
+{
+    struct telos_value *payload = telos_value_new_object(NULL, NULL, 0);
+    bool result;
+
+    if (payload == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Session marker allocation failed");
+        return false;
+    }
+    result = persist_session_value(chat, type, payload, error);
+    telos_value_release(payload);
+    return result;
+}
+
+static bool persist_session_snapshot(struct chat_session *chat,
+                                     struct telos_error **error)
+{
+    if (!persist_session_marker(chat, "session.reset", error)) {
+        return false;
+    }
+    for (size_t index = 0; index < chat->message_count; ++index) {
+        if (!persist_session_value(chat, "message", chat->messages[index],
+                                   error)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static const char *chat_provider_get(void *context)
@@ -349,7 +487,98 @@ static struct telos_value *read_session_file(const char *path,
     json[length] = '\0';
     items = telos_value_parse_json(json, (size_t)length, error);
     free(json);
+    if (items == NULL) {
+        if (error != NULL) {
+            telos_error_release(*error);
+            *error = NULL;
+        }
+        return read_jsonl_session_file(path, error);
+    }
     return items;
+}
+
+static void release_session_items(struct telos_value **items, size_t *count)
+{
+    for (size_t index = 0; index < *count; ++index) {
+        telos_value_release(items[index]);
+        items[index] = NULL;
+    }
+    *count = 0;
+}
+
+static bool append_loaded_session_item(struct telos_value **items,
+                                       size_t *count,
+                                       const struct telos_value *value,
+                                       struct telos_error **error)
+{
+    if (*count >= CHAT_MAXIMUM_MESSAGES) {
+        telos_value_release(items[0]);
+        memmove(items, items + 1,
+                (CHAT_MAXIMUM_MESSAGES - 1) * sizeof(items[0]));
+        *count = CHAT_MAXIMUM_MESSAGES - 1;
+    }
+    items[*count] = telos_value_retain(value);
+    if (items[*count] == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Session recovery allocation failed");
+        return false;
+    }
+    *count += 1;
+    return true;
+}
+
+static struct telos_value *read_jsonl_session_file(const char *path,
+                                                   struct telos_error **error)
+{
+    struct telos_event_store *store = NULL;
+    struct telos_value *items[CHAT_MAXIMUM_MESSAGES] = {0};
+    struct telos_value *result = NULL;
+    size_t count = 0;
+
+    store = telos_jsonl_store_create(path, error);
+    if (store == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0; index < telos_event_store_count(store); ++index) {
+        struct telos_event *event = telos_event_store_get(store, index, error);
+        const char *type;
+
+        if (event == NULL) {
+            goto cleanup;
+        }
+        type = telos_event_type(event);
+        if (strcmp(type, "session.reset") == 0) {
+            release_session_items(items, &count);
+        } else if (strcmp(type, "message") == 0) {
+            const struct telos_value *payload = telos_event_payload(event);
+            const char *role = telos_value_string(
+                telos_value_get(payload, "role"));
+            const char *content = telos_value_string(
+                telos_value_get(payload, "content"));
+
+            if (payload == NULL || telos_value_type(payload) !=
+                                       TELOS_VALUE_OBJECT ||
+                role == NULL || content == NULL ||
+                !append_loaded_session_item(items, &count, payload, error)) {
+                telos_event_release(event);
+                set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                          "JSONL session message is invalid");
+                goto cleanup;
+            }
+        }
+        telos_event_release(event);
+    }
+    result = telos_value_new_array(
+        (const struct telos_value *const *)items, count);
+    if (result == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Session recovery array allocation failed");
+    }
+
+cleanup:
+    release_session_items(items, &count);
+    telos_event_store_destroy(store);
+    return result;
 }
 
 static bool host_matches(const char *host, const char *expected)
@@ -814,6 +1043,14 @@ static bool append_message(struct chat_session *chat, const char *role,
     chat->message_sizes[chat->message_count] = size;
     chat->message_count += 1;
     chat->conversation_bytes += size;
+    if (!persist_session_value(chat, "message", message, error)) {
+        chat->message_count -= 1;
+        chat->conversation_bytes -= size;
+        chat->messages[chat->message_count] = NULL;
+        chat->message_sizes[chat->message_count] = 0;
+        telos_value_release(message);
+        return false;
+    }
     return true;
 }
 
@@ -1046,6 +1283,9 @@ static bool clear_command(const char *arguments,
 
     (void)arguments;
     (void)cancel;
+    if (!persist_session_marker(chat, "session.reset", error)) {
+        return false;
+    }
     clear_messages(chat);
     return emit_frontend(&observer, TELOS_FRONTEND_NOTICE,
                          "conversation cleared", NULL, error);
@@ -1062,6 +1302,9 @@ static bool new_command(const char *arguments,
 
     (void)arguments;
     (void)cancel;
+    if (!persist_session_marker(chat, "session.reset", error)) {
+        return false;
+    }
     clear_messages(chat);
     chat->session_name[0] = '\0';
     return emit_notice(emit, emit_context, "new session started", error);
@@ -1118,9 +1361,11 @@ static bool session_command(const char *arguments,
     (void)arguments;
     (void)cancel;
     if (snprintf(message, sizeof(message),
-                 "session %s · %zu messages · %zu bytes",
+                 "session %s · %zu messages · %zu bytes · %s",
                  chat->session_name[0] == '\0' ? "unnamed" : chat->session_name,
-                 chat->message_count, chat->conversation_bytes) >=
+                 chat->message_count, chat->conversation_bytes,
+                 chat->session_path[0] == '\0' ? "not persisted"
+                                               : chat->session_path) >=
         (int)sizeof(message)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                   "Session summary is too long");
@@ -1181,6 +1426,9 @@ static bool compact_command(const char *arguments,
     if (chat->message_count > keep) {
         drop_messages(chat, chat->message_count - keep);
     }
+    if (!persist_session_snapshot(chat, error)) {
+        return false;
+    }
     return emit_notice(emit, emit_context, "conversation compacted", error);
 }
 
@@ -1229,7 +1477,8 @@ static bool resume_command(const char *arguments,
         }
         result = replace_messages(chat, items, error);
         telos_value_release(items);
-        if (!result || !checkpoint_messages(chat, error)) {
+        if (!result || !persist_session_snapshot(chat, error) ||
+            !checkpoint_messages(chat, error)) {
             return false;
         }
         return emit_notice(emit, emit_context, "session resumed", error);
@@ -1311,7 +1560,7 @@ static bool import_command(const char *arguments,
     }
     result = replace_messages(chat, items, error);
     telos_value_release(items);
-    if (!result) {
+    if (!result || !persist_session_snapshot(chat, error)) {
         return false;
     }
     return emit_notice(emit, emit_context, "session imported", error);
@@ -1799,6 +2048,9 @@ static bool initialize_chat(struct chat_session *chat,
 
     chat->home_directory = home_directory;
     chat->current_directory = current_directory;
+    if (!initialize_session_store(chat, home_directory, error)) {
+        return false;
+    }
     if (provider_name == NULL ||
         (strcmp(provider_name, "openai") != 0 &&
          strcmp(provider_name, "openai-responses") != 0 &&
@@ -1930,6 +2182,7 @@ static void clear_chat(struct chat_session *chat)
     if (chat->provider_destroy != NULL) {
         chat->provider_destroy(chat->provider_context);
     }
+    telos_event_store_destroy(chat->session_store);
     telos_secret_broker_destroy(chat->secret_broker);
     if (chat->authentication_definition != NULL) {
         chat->authentication_definition->destroy(chat->authentication);

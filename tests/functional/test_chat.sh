@@ -158,6 +158,10 @@ grep -Fq "session exported" "$temporary/commands.output"
 grep -Fq "session resumed" "$temporary/commands.output"
 test -s "$temporary/export.json"
 test -s "$temporary/share.json"
+session_file=$(find "$temporary/home/.telos/sessions" -type f \
+    -name '*.jsonl' | sed -n '1p')
+test -n "$session_file"
+grep -Fq '"type":"message"' "$session_file"
 
 "$server" >"$temporary/chat-port" &
 server_pid=$!
