@@ -35,12 +35,25 @@ Use these commands to inspect or remove the session:
 /logout
 ```
 
-Set a Responses-compatible model before sending the first prompt:
+Choose a Responses-compatible model before sending the first prompt. It can be
+set before startup:
 
 ```sh
 export TELOS_AGENT_MODEL='your-responses-model'
 build/tools/telos
 ```
+
+Or choose one from the running TUI without restarting it:
+
+```text
+/model
+/model openai/gpt-5
+```
+
+`/model` lists the models registered by the official Model Catalog Plugin.
+Provider/model syntax avoids ambiguity when two Providers expose the same
+model name. A model supplied through `TELOS_AGENT_MODEL` is also accepted as a
+custom model.
 
 After OAuth login, the Provider sends requests to OpenAI's ChatGPT Codex
 Responses service. OAuth credentials are never added to prompts, Events, or

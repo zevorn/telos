@@ -53,6 +53,9 @@ export TELOS_AGENT_MODEL='your-responses-model'
 build/tools/telos
 ```
 
+You can also start without a model, run `/login`, and select one from the
+catalog with `/model openai/gpt-5` while the TUI is running.
+
 Running `telos` without a command opens the interactive terminal UI. Use
 `telos chat`, or run a single pipeline-friendly turn with
 `telos run 'your prompt'`. Responses-compatible local servers can be selected

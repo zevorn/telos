@@ -31,13 +31,18 @@ build/tools/telos
 
 Type `login` or `/login`, then open the displayed URL and enter its device
 code. The TUI starts without a configured model so login and status commands
-remain available. Before sending the first prompt, set a Responses-compatible
-model and restart the process:
+remain available. Before sending the first prompt, select a Responses-
+compatible model either in the environment or from the TUI:
 
 ```sh
 export TELOS_AGENT_MODEL='your-responses-model'
 build/tools/telos
 ```
+
+The running TUI accepts `/model` to list the catalog and `/model
+openai/gpt-5` to select a model without restarting. A model name supplied by
+`TELOS_AGENT_MODEL` is registered as a custom model when it is not in the
+official catalog.
 
 See [openai-login.md](openai-login.md) for credential storage, refresh,
 status, logout, and the API-key alternative.
