@@ -77,7 +77,8 @@ int main(void)
     bool passed = parser != NULL;
 
     for (size_t offset = 0; passed && offset < strlen(stream);) {
-        size_t chunk = strlen(stream) - offset > 5 ? 5 : strlen(stream) - offset;
+        size_t remaining = strlen(stream) - offset;
+        size_t chunk = remaining > 5 ? 5 : remaining;
 
         passed = telos_openai_chat_sse_parser_feed(parser, stream + offset,
                                                    chunk, &error);

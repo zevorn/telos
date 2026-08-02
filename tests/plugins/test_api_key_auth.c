@@ -9,6 +9,8 @@
 
 #include <telos/plugins/api_key_auth.h>
 
+typedef struct telos_authentication_definition_v1 telos_auth_definition;
+
 struct event_fixture {
     size_t completed;
 };
@@ -28,12 +30,9 @@ static bool capture_event(const struct telos_authentication_event *event,
     return true;
 }
 
-static void verify_profile(
-    const struct telos_authentication_definition_v1 *definition,
-                           const char *environment,
-                           const char *target,
-                           const char *key,
-                           const char *cache_name,
+static void verify_profile(const telos_auth_definition *definition,
+                           const char *environment, const char *target,
+                           const char *key, const char *cache_name,
                            const char *state_directory)
 {
     const struct telos_authentication_config config = {

@@ -11,6 +11,8 @@
 
 #include <telos/plugins/api_key_auth.h>
 
+typedef telos_authentication_config telos_auth_config;
+
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
 #endif
@@ -432,23 +434,20 @@ static char *resolve_authentication(telos_authentication *authentication,
     return result;
 }
 
-static telos_authentication *create_deepseek(
-    const struct telos_authentication_config *config,
-    struct telos_error **error)
+static telos_authentication *create_deepseek(const telos_auth_config *config,
+                                             struct telos_error **error)
 {
     return create_authentication(config, &deepseek_profile, error);
 }
 
-static telos_authentication *create_zai(
-    const struct telos_authentication_config *config,
-    struct telos_error **error)
+static telos_authentication *create_zai(const telos_auth_config *config,
+                                        struct telos_error **error)
 {
     return create_authentication(config, &zai_profile, error);
 }
 
-static telos_authentication *create_anthropic(
-    const struct telos_authentication_config *config,
-    struct telos_error **error)
+static telos_authentication *create_anthropic(const telos_auth_config *config,
+                                              struct telos_error **error)
 {
     return create_authentication(config, &anthropic_profile, error);
 }

@@ -55,8 +55,8 @@ telos_command_registry_find(const struct telos_command_registry *registry,
 }
 
 bool telos_command_registry_add(struct telos_command_registry *registry,
-                                 const struct telos_command *command,
-                                 struct telos_error **error)
+                                const struct telos_command *command,
+                                struct telos_error **error)
 {
     if (error != NULL) {
         *error = NULL;
@@ -130,11 +130,13 @@ static bool parse_input(const char *input, char name[TELOS_COMMAND_NAME_SIZE],
     return true;
 }
 
-bool telos_command_registry_dispatch(
-    const struct telos_command_registry *registry, const char *input,
-    const struct telos_cancel *cancel, telos_frontend_emit_fn emit,
-    void *emit_context, bool *handled, bool *exit_requested,
-    struct telos_error **error)
+bool telos_command_registry_dispatch(const telos_command_registry *registry,
+                                     const char *input,
+                                     const struct telos_cancel *cancel,
+                                     telos_frontend_emit_fn emit,
+                                     void *emit_context, bool *handled,
+                                     bool *exit_requested,
+                                     struct telos_error **error)
 {
     char name[TELOS_COMMAND_NAME_SIZE];
     char arguments[TELOS_COMMAND_ARGUMENT_SIZE];

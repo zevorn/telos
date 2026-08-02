@@ -36,6 +36,8 @@ struct telos_model_catalog {
     bool has_current;
 };
 
+typedef struct telos_model_catalog telos_model_catalog;
+
 struct telos_model_catalog_definition_v1 {
     uint32_t struct_size;
     const char *id;
@@ -43,25 +45,25 @@ struct telos_model_catalog_definition_v1 {
                 struct telos_error **error);
 };
 
-typedef bool (*telos_model_visit_fn)(
-    const struct telos_model_descriptor *model, void *context,
-    struct telos_error **error);
+typedef bool (*telos_model_visit_fn)(const struct telos_model_descriptor *model,
+                                     void *context,
+                                     struct telos_error **error);
 
 void telos_model_catalog_initialize(struct telos_model_catalog *catalog);
 
 bool telos_model_catalog_add(struct telos_model_catalog *catalog,
-                              const struct telos_model_descriptor *model,
-                              struct telos_error **error);
+                             const struct telos_model_descriptor *model,
+                             struct telos_error **error);
 
 const struct telos_model_descriptor *
 telos_model_catalog_at(const struct telos_model_catalog *catalog, size_t index);
 
-const struct telos_model_descriptor *telos_model_catalog_current(
-    const struct telos_model_catalog *catalog);
+const struct telos_model_descriptor *
+telos_model_catalog_current(const telos_model_catalog *catalog);
 
-const struct telos_model_descriptor *telos_model_catalog_find(
-    const struct telos_model_catalog *catalog, const char *provider,
-    const char *id);
+const struct telos_model_descriptor *
+telos_model_catalog_find(const telos_model_catalog *catalog,
+                         const char *provider, const char *id);
 
 bool telos_model_catalog_select(struct telos_model_catalog *catalog,
                                 const char *provider, const char *id,

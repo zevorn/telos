@@ -39,8 +39,8 @@ telos_model_catalog_at(const struct telos_model_catalog *catalog, size_t index)
     return &catalog->models[index];
 }
 
-const struct telos_model_descriptor *telos_model_catalog_current(
-    const struct telos_model_catalog *catalog)
+const struct telos_model_descriptor *
+telos_model_catalog_current(const telos_model_catalog *catalog)
 {
     if (catalog == NULL || !catalog->has_current) {
         return NULL;
@@ -48,9 +48,9 @@ const struct telos_model_descriptor *telos_model_catalog_current(
     return telos_model_catalog_at(catalog, catalog->current);
 }
 
-const struct telos_model_descriptor *telos_model_catalog_find(
-    const struct telos_model_catalog *catalog, const char *provider,
-    const char *id)
+const struct telos_model_descriptor *
+telos_model_catalog_find(const telos_model_catalog *catalog,
+                         const char *provider, const char *id)
 {
     if (catalog == NULL || provider == NULL || id == NULL) {
         return NULL;
