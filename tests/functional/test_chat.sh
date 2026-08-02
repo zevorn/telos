@@ -80,3 +80,27 @@ wait "$server_pid"
 server_pid=
 grep -Fq "Telos > hello from chat functional test" \
     "$temporary/chat-provider.output"
+
+"$server" >"$temporary/anthropic-port" &
+server_pid=$!
+attempt=0
+while ! test -s "$temporary/anthropic-port"; do
+    attempt=$((attempt + 1))
+    if test "$attempt" -ge 100; then
+        echo "Anthropic fixture server did not start" >&2
+        exit 1
+    fi
+    sleep 0.01
+done
+
+anthropic_port=$(sed -n '1p' "$temporary/anthropic-port")
+anthropic_endpoint="http://127.0.0.1:$anthropic_port/v1"
+HOME="$temporary/home" "$telos" \
+    --provider anthropic \
+    --model claude-sonnet-4-5 \
+    --endpoint "$anthropic_endpoint" \
+    run hello >"$temporary/anthropic.output"
+wait "$server_pid"
+server_pid=
+grep -Fq "Telos > hello from anthropic functional test" \
+    "$temporary/anthropic.output"

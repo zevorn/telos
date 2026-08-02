@@ -47,6 +47,16 @@ int main(void)
         "\"hello from chat functional test\"},\"finish_reason\":"
         "\"stop\"}]}\n\n"
         "data: [DONE]\n\n";
+    static const char anthropic_response[] =
+        "event: message_start\n"
+        "data: {\"type\":\"message_start\",\"message\":{"
+        "\"id\":\"msg_functional\"}}\n\n"
+        "event: content_block_delta\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":"
+        "\"hello from anthropic functional test\"}}\n\n"
+        "event: message_stop\n"
+        "data: {\"type\":\"message_stop\"}\n\n";
     struct sockaddr_in address = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
@@ -65,6 +75,7 @@ int main(void)
     int header_size;
     const char *response;
     bool chat_request;
+    bool anthropic_request;
 
     listener = socket(AF_INET, SOCK_STREAM, 0);
     if (listener < 0 ||
@@ -102,13 +113,18 @@ int main(void)
         }
     }
     chat_request = strstr(request, "POST /v1/chat/completions HTTP/") != NULL;
-    if (!chat_request && strstr(request, "POST /v1/responses HTTP/") == NULL) {
+    anthropic_request = strstr(request, "POST /v1/messages HTTP/") != NULL;
+    if (!chat_request && !anthropic_request &&
+        strstr(request, "POST /v1/responses HTTP/") == NULL) {
         goto cleanup;
     }
     if ((!chat_request &&
+         !anthropic_request &&
          strstr(request, "\"model\":\"local-model\"") == NULL) ||
         (chat_request &&
          strstr(request, "\"model\":\"deepseek-chat\"") == NULL) ||
+        (anthropic_request &&
+         strstr(request, "\"model\":\"claude-sonnet-4-5\"") == NULL) ||
         strstr(request, "\"content\":\"hello\"") == NULL ||
         strstr(request, "# KERNEL CONTRACT") == NULL) {
         goto cleanup;
@@ -116,7 +132,12 @@ int main(void)
     if (chat_request && strstr(request, "\"messages\"") == NULL) {
         goto cleanup;
     }
-    response = chat_request ? chat_response : responses_response;
+    if (anthropic_request && strstr(request, "\"system\"") == NULL) {
+        goto cleanup;
+    }
+    response = anthropic_request ? anthropic_response
+                                 : (chat_request ? chat_response
+                                                  : responses_response);
     header_size = snprintf(header, sizeof(header),
                            "HTTP/1.1 200 OK\r\n"
                            "Content-Type: text/event-stream\r\n"

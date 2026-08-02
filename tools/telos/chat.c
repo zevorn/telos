@@ -12,6 +12,7 @@
 #include <telos/authentication.h>
 #include <telos/command.h>
 #include <telos/model.h>
+#include <telos/plugins/anthropic.h>
 #include <telos/plugins/curl_transport.h>
 #include <telos/plugins/model_catalog.h>
 #include <telos/plugins/openai_codex_auth.h>
@@ -179,6 +180,8 @@ static char *resolve_secret(const char *reference, const char *target,
         if (value == NULL || value[0] == '\0') {
             value = getenv("Z_AI_API_KEY");
         }
+    } else if (strcmp(provider, "anthropic") == 0) {
+        value = getenv("ANTHROPIC_API_KEY");
     }
     if ((value == NULL || value[0] == '\0') && chat->loopback_endpoint) {
         value = "local";
@@ -226,6 +229,12 @@ static bool create_provider(struct chat_session *chat,
     telos_provider_dispatch_fn provider_dispatch = NULL;
     void (*provider_destroy)(void *provider) = NULL;
     const struct telos_transport_header *headers = NULL;
+    const struct telos_transport_header anthropic_headers[] = {
+        {
+            .name = "anthropic-version",
+            .value = "2023-06-01",
+        },
+    };
     size_t header_count = 0;
     int written;
 
@@ -245,6 +254,11 @@ static bool create_provider(struct chat_session *chat,
         secret_provider = "zai";
         if (strcmp(endpoint, "https://api.openai.com/v1") == 0) {
             endpoint = "https://api.z.ai/api/paas/v4";
+        }
+    } else if (strcmp(provider_name, "anthropic") == 0) {
+        secret_provider = "anthropic";
+        if (strcmp(endpoint, "https://api.openai.com/v1") == 0) {
+            endpoint = "https://api.anthropic.com/v1";
         }
     } else {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
@@ -333,6 +347,25 @@ static bool create_provider(struct chat_session *chat,
         provider_dispatch = telos_openai_chat_provider_dispatch;
         provider_destroy =
             (void (*)(void *))telos_openai_chat_provider_destroy;
+    } else if (model->api == TELOS_MODEL_API_ANTHROPIC_MESSAGES) {
+        const struct telos_anthropic_config config = {
+            .model = chat->model,
+            .endpoint = endpoint,
+            .secret_reference = secret_reference,
+            .secret_target = secret_reference + sizeof("secret:") - 1,
+            .secret_broker = chat->secret_broker,
+            .capabilities = capabilities,
+            .capability_count = 2,
+            .headers = anthropic_headers,
+            .header_count = 1,
+            .send = telos_curl_transport_send,
+            .transport_context = &chat->transport,
+            .unknown_event_policy = TELOS_ANTHROPIC_UNKNOWN_EVENT_IGNORE,
+        };
+
+        provider_context = telos_anthropic_provider_create(&config, error);
+        provider_dispatch = telos_anthropic_provider_dispatch;
+        provider_destroy = (void (*)(void *))telos_anthropic_provider_destroy;
     } else {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
                   "The selected Provider Plugin API is not available");
@@ -958,7 +991,9 @@ static bool select_configured_model(struct chat_session *chat,
             .name = model,
             .api = strcmp(provider, "openai") == 0
                        ? TELOS_MODEL_API_OPENAI_RESPONSES
-                       : TELOS_MODEL_API_OPENAI_CHAT,
+                       : (strcmp(provider, "anthropic") == 0
+                              ? TELOS_MODEL_API_ANTHROPIC_MESSAGES
+                              : TELOS_MODEL_API_OPENAI_CHAT),
             .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
                             TELOS_MODEL_CAPABILITY_TOOLS,
         };
@@ -994,7 +1029,8 @@ static bool initialize_chat(struct chat_session *chat,
          strcmp(provider_name, "openai-responses") != 0 &&
          strcmp(provider_name, "dev.zevorn.openai-responses") != 0 &&
          strcmp(provider_name, "deepseek") != 0 &&
-         strcmp(provider_name, "zai") != 0)) {
+         strcmp(provider_name, "zai") != 0 &&
+         strcmp(provider_name, "anthropic") != 0)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
                   "The configured Agent Provider is not available");
         return false;

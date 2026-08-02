@@ -195,11 +195,29 @@ openai_chat_plugin_tests = [
      'test_openai_chat_transport.c'],
 ]
 
+anthropic_plugin_tests = [
+    ['anthropic-request', 'test-anthropic-request',
+     'test_anthropic_request.c'],
+    ['anthropic-sse', 'test-anthropic-sse', 'test_anthropic_sse.c'],
+    ['anthropic-transport', 'test-anthropic-transport',
+     'test_anthropic_transport.c'],
+]
+
 foreach entry : openai_plugin_tests
     plugin_test = executable(
         entry[1],
         entry[2],
         dependencies: telos_openai_responses_plugin_dep,
+    )
+
+    test(entry[0], plugin_test, suite: 'plugins')
+endforeach
+
+foreach entry : anthropic_plugin_tests
+    plugin_test = executable(
+        entry[1],
+        entry[2],
+        dependencies: telos_anthropic_plugin_dep,
     )
 
     test(entry[0], plugin_test, suite: 'plugins')
@@ -391,6 +409,7 @@ if get_option('shared_plugins')
         telos_markdown_store_module,
         telos_openai_responses_module,
         telos_openai_chat_module,
+        telos_anthropic_module,
         telos_agent_skills_module,
         telos_project_guidance_module,
     ]
@@ -400,6 +419,7 @@ if get_option('shared_plugins')
         telos_markdown_store_module.full_path(),
         telos_openai_responses_module.full_path(),
         telos_openai_chat_module.full_path(),
+        telos_anthropic_module.full_path(),
         telos_agent_skills_module.full_path(),
         telos_project_guidance_module.full_path(),
     ]
@@ -409,6 +429,7 @@ if get_option('shared_plugins')
         meson.project_source_root() / 'plugins/stores/markdown',
         meson.project_source_root() / 'plugins/providers/openai-responses',
         meson.project_source_root() / 'plugins/providers/openai-chat',
+        meson.project_source_root() / 'plugins/providers/anthropic',
         meson.project_source_root() / 'plugins/resources/agent-skills',
         meson.project_source_root()
             / 'plugins/context-sources/project-guidance',
