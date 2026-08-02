@@ -195,6 +195,33 @@ foreach entry : openai_plugin_tests
     test(entry[0], plugin_test, suite: 'plugins')
 endforeach
 
+if posix_host_plugins_available
+    test_openai_codex_auth = executable(
+        'test-openai-codex-auth',
+        'test_openai_codex_auth.c',
+        dependencies: telos_openai_codex_auth_plugin_dep,
+    )
+
+    test(
+        'openai-codex-auth',
+        test_openai_codex_auth,
+        suite: 'plugins',
+    )
+
+    test_openai_codex_auth_invalid = executable(
+        'test-openai-codex-auth-invalid',
+        'test_openai_codex_auth_invalid.c',
+        dependencies: telos_openai_codex_auth_plugin_dep,
+    )
+
+    test(
+        'openai-codex-auth-invalid',
+        test_openai_codex_auth_invalid,
+        suite: 'plugins',
+        timeout: 30,
+    )
+endif
+
 if terminal_frontend_available
     test_terminal_frontend = executable(
         'test-terminal-frontend',
@@ -351,6 +378,16 @@ if get_option('shared_plugins')
         meson.project_source_root()
             / 'plugins/context-sources/project-guidance',
     ]
+    if posix_host_plugins_available
+        official_plugin_modules += [telos_openai_codex_auth_module]
+        official_plugin_module_paths += [
+            telos_openai_codex_auth_module.full_path(),
+        ]
+        official_plugin_source_paths += [
+            meson.project_source_root()
+                / 'plugins/authentication/openai-codex',
+        ]
+    endif
     if terminal_frontend_available
         official_plugin_modules += [telos_terminal_frontend_module]
         official_plugin_module_paths += [

@@ -6,6 +6,10 @@ subdir('context-sources')
 posix_host_plugins_available = host_machine.system() == 'linux' or \
     host_machine.system() == 'darwin'
 
+if posix_host_plugins_available
+    subdir('authentication')
+endif
+
 terminal_frontend_available = posix_host_plugins_available
 if terminal_frontend_available
     subdir('frontends')
@@ -27,6 +31,10 @@ telos_official_plugin_deps = [
 
 if terminal_frontend_available
     telos_official_plugin_deps += telos_terminal_frontend_plugin_dep
+endif
+
+if posix_host_plugins_available
+    telos_official_plugin_deps += telos_openai_codex_auth_plugin_dep
 endif
 
 if curl_transport_available

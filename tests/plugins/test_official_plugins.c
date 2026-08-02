@@ -11,6 +11,7 @@
 
 #include <telos/manifest.h>
 #include <telos/plugin.h>
+#include <telos/authentication.h>
 #include <telos/frontend.h>
 #include <telos/plugins/project_guidance.h>
 #include <telos/provider.h>
@@ -156,13 +157,13 @@ int main(int argc, char **argv)
         "dev.zevorn.memory-store",   "dev.zevorn.ring-store",
         "dev.zevorn.markdown-store", "dev.zevorn.openai-responses",
         "dev.zevorn.agent-skills",   "dev.zevorn.project-guidance",
-        "dev.zevorn.terminal-frontend",
-        "dev.zevorn.curl-transport",
+        "dev.zevorn.openai-codex-auth",
+        "dev.zevorn.terminal-frontend", "dev.zevorn.curl-transport",
     };
     size_t plugin_count;
     struct telos_registry *registry;
     struct telos_host_api_v1 host;
-    struct telos_plugin_module *modules[8] = {0};
+    struct telos_plugin_module *modules[9] = {0};
     struct telos_registry_generation *generation;
     struct telos_value *empty = telos_value_new_object(NULL, NULL, 0);
     struct telos_value *capacity = telos_value_new_integer(2);
@@ -190,7 +191,7 @@ int main(int argc, char **argv)
     struct telos_value *invalid_markdown =
         telos_value_new_object(markdown_keys, empty_path_values, 1);
 
-    assert(argc >= 13 && argc <= 17 && argc % 2 == 1);
+    assert(argc >= 13 && argc <= 19 && argc % 2 == 1);
     plugin_count = ((size_t)argc - 1) / 2;
     assert(descriptor >= 0);
     close(descriptor);
@@ -256,23 +257,39 @@ int main(int argc, char **argv)
         assert(definition->free_string != NULL);
     }
     if (plugin_count > 6) {
+        const struct telos_extension_descriptor *authentication =
+            find_extension(generation, TELOS_EXTENSION_AUTHENTICATION,
+                           plugin_ids[6]);
+        const struct telos_authentication_definition_v1 *definition =
+            authentication->implementation;
+
+        assert(definition->struct_size >= sizeof(*definition));
+        assert(strcmp(definition->id, plugin_ids[6]) == 0);
+        assert(definition->create != NULL);
+        assert(definition->destroy != NULL);
+        assert(definition->login != NULL);
+        assert(definition->logout != NULL);
+        assert(definition->status != NULL);
+        assert(definition->resolve != NULL);
+    }
+    if (plugin_count > 7) {
         const struct telos_extension_descriptor *frontend = find_extension(
-            generation, TELOS_EXTENSION_FRONTEND, plugin_ids[6]);
+            generation, TELOS_EXTENSION_FRONTEND, plugin_ids[7]);
         const struct telos_frontend_definition_v1 *definition =
             frontend->implementation;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[6]) == 0);
+        assert(strcmp(definition->id, plugin_ids[7]) == 0);
         assert(definition->run != NULL);
     }
-    if (plugin_count > 7) {
+    if (plugin_count > 8) {
         const struct telos_extension_descriptor *transport = find_extension(
-            generation, TELOS_EXTENSION_TRANSPORT, plugin_ids[7]);
+            generation, TELOS_EXTENSION_TRANSPORT, plugin_ids[8]);
         const struct telos_transport_definition_v1 *definition =
             transport->implementation;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[7]) == 0);
+        assert(strcmp(definition->id, plugin_ids[8]) == 0);
         assert(definition->send != NULL);
     }
 
