@@ -47,6 +47,14 @@ static const struct telos_model_descriptor models[] = {
     },
     {
         .provider = "zai",
+        .id = "glm-4",
+        .name = "GLM-4",
+        .api = TELOS_MODEL_API_OPENAI_CHAT,
+        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                        TELOS_MODEL_CAPABILITY_TOOLS,
+    },
+    {
+        .provider = "zai",
         .id = "glm-4.7",
         .name = "GLM-4.7",
         .api = TELOS_MODEL_API_OPENAI_CHAT,

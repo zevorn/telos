@@ -31,6 +31,7 @@ int main(void)
     assert(telos_model_catalog_find(&catalog, "deepseek",
                                     "deepseek-reasoner") != NULL);
     assert(telos_model_catalog_find(&catalog, "zai", "glm-4.7") != NULL);
+    assert(telos_model_catalog_find(&catalog, "zai", "glm-4") != NULL);
     assert(telos_model_catalog_find(&catalog, "anthropic",
                                     "claude-sonnet-4-5") != NULL);
     assert(!telos_official_model_catalog_add(&catalog, &error));
