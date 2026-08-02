@@ -1509,7 +1509,12 @@ static bool copy_command(const char *arguments,
             telos_value_string(telos_value_get(message, "content"));
 
         if (role != NULL && strcmp(role, "assistant") == 0 && content != NULL) {
-            return emit_notice(emit, emit_context, content, error);
+            return emit_frontend(
+                &(struct observer_context){
+                    .emit = emit,
+                    .emit_context = emit_context,
+                },
+                TELOS_FRONTEND_CLIPBOARD, content, "clipboard", error);
         }
     }
     return emit_notice(emit, emit_context, "no assistant response to copy",
@@ -1932,7 +1937,8 @@ static bool register_chat_commands(struct chat_session *chat,
             .help = "show terminal editing keys",
             .run = static_notice_command,
             .context =
-                "Enter submits · Ctrl+J or Alt+Enter adds a line · Esc cancels",
+                "Enter submits · Ctrl+J or Alt+Enter adds a line · Esc cancels · "
+                "Ctrl+G opens $EDITOR",
         },
         {
             .name = "changelog",

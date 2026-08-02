@@ -39,6 +39,10 @@ static bool run_turn(const char *input, const struct telos_cancel *cancel,
         return emit_event(emit, emit_context, TELOS_FRONTEND_NOTICE,
                           "open the verification URL", NULL, error);
     }
+    if (strcmp(input, "prompt fixture") == 0) {
+        return emit_event(emit, emit_context, TELOS_FRONTEND_TEXT_DELTA,
+                          "prompt consumed", NULL, error);
+    }
     if (strcmp(input, "delta") == 0 || strcmp(input, "delta\t") == 0) {
         return emit_event(emit, emit_context, TELOS_FRONTEND_TEXT_DELTA,
                           "implicit\ttext\n", NULL, error) &&
@@ -63,7 +67,9 @@ static bool run_turn(const char *input, const struct telos_cancel *cancel,
            emit_event(emit, emit_context, TELOS_FRONTEND_TOOL_STARTED, NULL,
                       "lookup", error) &&
            emit_event(emit, emit_context, TELOS_FRONTEND_TOOL_COMPLETED, NULL,
-                      "lookup", error);
+                      "lookup", error) &&
+           emit_event(emit, emit_context, TELOS_FRONTEND_CLIPBOARD, "clip",
+                      "clipboard", error);
 }
 
 static void expect_invalid(const telos_terminal_frontend_config *config)
@@ -138,6 +144,7 @@ int main(void)
     assert(strstr(output, "Telos > hello world") != NULL);
     assert(strstr(output, "[tool] lookup") != NULL);
     assert(strstr(output, "[done] lookup") != NULL);
+    assert(strstr(output, "[clipboard] clip") != NULL);
     assert(strstr(output, "[failed] ") != NULL);
     assert(strstr(output, "[notice] cleared") != NULL);
     assert(strstr(output, "[notice] open the verification URL") != NULL);
@@ -145,6 +152,31 @@ int main(void)
     assert(strstr(output, "/help /clear /quit") != NULL);
     assert(strstr(output, "/login /logout") != NULL);
     assert(strchr(output, '\033') == NULL);
+
+    {
+        static const char shell_input[] =
+            "!printf shell_fixture\n!!printf 'prompt fixture'\n/quit\n";
+
+        assert(pipe(input_pipe) == 0);
+        assert(pipe(output_pipe) == 0);
+        assert(write(input_pipe[1], shell_input, sizeof(shell_input) - 1) ==
+               (ssize_t)(sizeof(shell_input) - 1));
+        close(input_pipe[1]);
+        config = (struct telos_terminal_frontend_config){
+            .session = &session,
+            .input_descriptor = input_pipe[0],
+            .output_descriptor = output_pipe[1],
+            .force_plain = true,
+        };
+        assert(telos_terminal_frontend_run(&config, &error));
+        assert(error == NULL);
+        close(input_pipe[0]);
+        close(output_pipe[1]);
+        assert(read_output(output_pipe[0], output, sizeof(output)) > 0);
+        close(output_pipe[0]);
+        assert(strstr(output, "shell_fixture") != NULL);
+        assert(strstr(output, "prompt consumed") != NULL);
+    }
 
     {
         struct turn_fixture single_fixture = {0};

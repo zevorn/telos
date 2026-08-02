@@ -142,6 +142,9 @@ directory, file contents are bounded, and shell output is capped. Set
 | Down | Clear recalled input |
 | Backspace or Delete | Remove a character |
 | Esc or Ctrl+C | Cancel the active Turn, clear input, or exit when idle |
+| Ctrl+G | Open the current prompt in `$VISUAL` or `$EDITOR` |
+| `!command` | Run a bounded shell command in the project directory |
+| `!!command` | Run a shell command and send its output as the next prompt |
 
 Bracketed paste is enabled. `/help` displays commands, `/clear` drops the
 bounded conversation history, and `/quit` exits. `login` or `/login` starts

@@ -2,6 +2,7 @@
 #define _XOPEN_SOURCE 700
 
 #include <errno.h>
+#include <fcntl.h>
 #include <locale.h>
 #include <poll.h>
 #include <pthread.h>
@@ -9,9 +10,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <time.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <wchar.h>
 
@@ -27,6 +30,9 @@
 #define TERMINAL_MAXIMUM_EDITOR_ROWS 8U
 #define TERMINAL_RENDER_LINE_SIZE (TERMINAL_MAXIMUM_COLUMNS * 4U + 128U)
 #define TERMINAL_POLL_MILLISECONDS 80
+#define TERMINAL_SHELL_OUTPUT_SIZE (256U * 1024U)
+#define TERMINAL_SHELL_TIMEOUT_MILLISECONDS 30000U
+#define TERMINAL_CLIPBOARD_SIZE (1024U * 1024U)
 
 _Static_assert(TERMINAL_STREAM_SIZE >
                    TERMINAL_EVENT_TEXT_SIZE + TERMINAL_MAXIMUM_COLUMNS,
@@ -77,6 +83,9 @@ struct terminal_state {
 
     char stream[TERMINAL_STREAM_SIZE];
     size_t stream_size;
+    char shell_output[TERMINAL_SHELL_OUTPUT_SIZE];
+    char clipboard[TERMINAL_CLIPBOARD_SIZE];
+    size_t clipboard_size;
     bool response_active;
     bool response_first_line;
     size_t rendered_rows;
@@ -104,6 +113,12 @@ static bool plain_emit(const struct telos_frontend_event *event,
 
 static bool json_emit(const struct telos_frontend_event *event,
                       void *context, struct telos_error **error);
+
+static void disable_raw_mode(struct terminal_state *state);
+static bool enable_raw_mode(struct terminal_state *state,
+                            struct telos_error **error);
+static bool editor_external(struct terminal_state *state,
+                            struct telos_error **error);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -135,6 +150,162 @@ static bool write_all(int descriptor, const char *data, size_t size)
 static bool write_text(int descriptor, const char *text)
 {
     return write_all(descriptor, text, strlen(text));
+}
+
+static int64_t monotonic_milliseconds(void)
+{
+    struct timespec current;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &current) != 0) {
+        return 0;
+    }
+    return (int64_t)current.tv_sec * INT64_C(1000) +
+           current.tv_nsec / INT64_C(1000000);
+}
+
+static bool run_shell_command(const char *working_directory,
+                              const char *command,
+                              char *output,
+                              size_t output_size,
+                              int *exit_status,
+                              struct telos_error **error)
+{
+    int descriptors[2];
+    pid_t child;
+    int status = 0;
+    int64_t started;
+    size_t used = 0;
+    bool closed = false;
+    bool truncated = false;
+    const char *shell = getenv("TELOS_AGENT_SHELL");
+
+    if (working_directory == NULL || command == NULL || output == NULL ||
+        output_size < 2 || exit_status == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Shell command arguments are invalid");
+        return false;
+    }
+    if (shell == NULL || shell[0] == '\0') {
+        shell = getenv("SHELL");
+    }
+    if (shell == NULL || shell[0] == '\0') {
+        shell = "/bin/sh";
+    }
+    if (pipe(descriptors) != 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Shell output pipe could not be created");
+        return false;
+    }
+    child = fork();
+    if (child < 0) {
+        close(descriptors[0]);
+        close(descriptors[1]);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Shell process could not be created");
+        return false;
+    }
+    if (child == 0) {
+        int null_descriptor = open("/dev/null", O_RDONLY);
+
+        if (null_descriptor >= 0) {
+            dup2(null_descriptor, STDIN_FILENO);
+            close(null_descriptor);
+        }
+        if (chdir(working_directory) != 0 ||
+            dup2(descriptors[1], STDOUT_FILENO) < 0 ||
+            dup2(descriptors[1], STDERR_FILENO) < 0) {
+            _exit(127);
+        }
+        close(descriptors[0]);
+        close(descriptors[1]);
+        execl(shell, shell, "-c", command, (char *)NULL);
+        _exit(127);
+    }
+    close(descriptors[1]);
+    if (fcntl(descriptors[0], F_SETFL, O_NONBLOCK) != 0) {
+        kill(child, SIGKILL);
+        close(descriptors[0]);
+        waitpid(child, NULL, 0);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Shell output pipe could not be configured");
+        return false;
+    }
+    started = monotonic_milliseconds();
+    while (!closed) {
+        struct pollfd descriptor = {
+            .fd = descriptors[0],
+            .events = POLLIN | POLLHUP,
+        };
+        char chunk[4096];
+        int ready;
+
+        ready = poll(&descriptor, 1, 100);
+        if (ready < 0 && errno == EINTR) {
+            continue;
+        }
+        if (ready < 0) {
+            kill(child, SIGKILL);
+            close(descriptors[0]);
+            waitpid(child, NULL, 0);
+            set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                      "Shell output could not be read");
+            return false;
+        }
+        if (ready > 0) {
+            ssize_t count;
+
+            do {
+                count = read(descriptors[0], chunk, sizeof(chunk));
+                if (count > 0) {
+                    size_t copy = (size_t)count;
+
+                    if (copy > output_size - 1 - used) {
+                        copy = output_size - 1 - used;
+                        truncated = true;
+                    }
+                    if (copy > 0) {
+                        memcpy(output + used, chunk, copy);
+                        used += copy;
+                    }
+                }
+            } while (count > 0);
+            if (count == 0) {
+                closed = true;
+            } else if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+                       errno != EINTR) {
+                kill(child, SIGKILL);
+                close(descriptors[0]);
+                waitpid(child, NULL, 0);
+                set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                          "Shell output could not be read");
+                return false;
+            }
+        }
+        if (monotonic_milliseconds() - started >=
+            TERMINAL_SHELL_TIMEOUT_MILLISECONDS) {
+            kill(child, SIGKILL);
+            truncated = true;
+            if (used + sizeof("[shell command timed out]\n") < output_size) {
+                memcpy(output + used, "[shell command timed out]\n",
+                       sizeof("[shell command timed out]\n") - 1);
+                used += sizeof("[shell command timed out]\n") - 1;
+            }
+            closed = true;
+        }
+    }
+    close(descriptors[0]);
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    if (truncated &&
+        used + sizeof("[shell output truncated]\n") < output_size) {
+        memcpy(output + used, "[shell output truncated]\n",
+               sizeof("[shell output truncated]\n") - 1);
+        used += sizeof("[shell output truncated]\n") - 1;
+    }
+    output[used] = '\0';
+    *exit_status = WIFEXITED(status) ? WEXITSTATUS(status)
+                                     : 128 + WTERMSIG(status);
+    return true;
 }
 
 static size_t copy_text(char *target, size_t target_size, const char *source)
@@ -693,6 +864,39 @@ static void write_status_line(struct terminal_state *state, const char *symbol,
     write_text(state->output_descriptor, "\033[0m\033[K\r\n");
 }
 
+static void write_clipboard(struct terminal_state *state)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        "0123456789+/";
+
+    write_text(state->output_descriptor, "\033]52;c;");
+    for (size_t index = 0; index < state->clipboard_size; index += 3) {
+        char encoded[4];
+        size_t remaining = state->clipboard_size - index;
+        uint32_t value = (uint32_t)(unsigned char)state->clipboard[index]
+                         << 16;
+
+        if (remaining > 1) {
+            value |= (uint32_t)(unsigned char)state->clipboard[index + 1]
+                     << 8;
+        }
+        if (remaining > 2) {
+            value |= (unsigned char)state->clipboard[index + 2];
+        }
+        encoded[0] = alphabet[(value >> 18) & 0x3fU];
+        encoded[1] = alphabet[(value >> 12) & 0x3fU];
+        encoded[2] = remaining > 1 ? alphabet[(value >> 6) & 0x3fU] : '=';
+        encoded[3] = remaining > 2 ? alphabet[value & 0x3fU] : '=';
+        write_all(state->output_descriptor, encoded, sizeof(encoded));
+    }
+    write_text(state->output_descriptor, "\033\\");
+    write_status_line(state, "•", "response copied to clipboard",
+                      state->color ? "\033[38;5;245m" : NULL);
+    state->clipboard_size = 0;
+    state->clipboard[0] = '\0';
+}
+
 static bool queue_push(struct terminal_state *state,
                        const struct queued_event *event)
 {
@@ -763,7 +967,9 @@ static bool queue_frontend_event(const struct telos_frontend_event *event,
             memcpy(queued.text, text, chunk);
             queued.text[chunk] = '\0';
         }
-        copy_text(queued.name, sizeof(queued.name), event->name);
+        if (size == chunk) {
+            copy_text(queued.name, sizeof(queued.name), event->name);
+        }
         if (!queue_push(state, &queued)) {
             set_error(error, TELOS_ERROR_DOMAIN_CANCELLED, ECANCELED,
                       "Terminal Frontend stopped accepting Events");
@@ -858,8 +1064,44 @@ static void show_help(struct terminal_state *state)
     write_text(state->output_descriptor,
                "\r\n"
                "Enter submits · Ctrl+J or Alt+Enter adds a line · "
-               "Esc cancels\r\n\r\n");
+               "Esc cancels · Ctrl+G opens $EDITOR · !command runs a "
+               "shell command · !!command sends its output\r\n\r\n");
     end_frame(state);
+}
+
+static bool show_shell_result(struct terminal_state *state,
+                              const char *command,
+                              struct telos_error **error)
+{
+    int status;
+
+    if (!run_shell_command(state->session->working_directory, command,
+                           state->shell_output, sizeof(state->shell_output),
+                           &status, error)) {
+        return false;
+    }
+    begin_frame(state);
+    clear_dynamic(state);
+    write_text(state->output_descriptor, "\r\n");
+    write_text(state->output_descriptor, "! ");
+    write_sanitized(state, command, strlen(command));
+    write_text(state->output_descriptor, "\r\n");
+    write_sanitized(state, state->shell_output,
+                    strlen(state->shell_output));
+    if (state->shell_output[0] != '\0' &&
+        state->shell_output[strlen(state->shell_output) - 1] != '\n') {
+        write_text(state->output_descriptor, "\r\n");
+    }
+    if (status != 0) {
+        char message[64];
+
+        if (snprintf(message, sizeof(message), "[shell exited with %d]\r\n",
+                     status) < (int)sizeof(message)) {
+            write_text(state->output_descriptor, message);
+        }
+    }
+    end_frame(state);
+    return true;
 }
 
 static bool start_turn(struct terminal_state *state, const char *prompt,
@@ -924,6 +1166,27 @@ static bool start_turn(struct terminal_state *state, const char *prompt,
         return true;
     }
 
+    if (prompt[0] == '!') {
+        const bool capture = prompt[1] == '!';
+        const char *command = prompt + (capture ? 2 : 1);
+
+        if (command[0] == '\0') {
+            return queue_frontend_event(
+                &(const struct telos_frontend_event){
+                    .kind = TELOS_FRONTEND_NOTICE,
+                    .text = "Usage: !command or !!command",
+                },
+                state, error);
+        }
+        if (!show_shell_result(state, command, error)) {
+            return false;
+        }
+        if (capture && state->shell_output[0] != '\0') {
+            return start_turn(state, state->shell_output, error);
+        }
+        return true;
+    }
+
     begin_frame(state);
     clear_dynamic(state);
     write_user_prompt(state, prompt);
@@ -982,6 +1245,27 @@ static void handle_frontend_event(struct terminal_state *state,
         flush_stream(state, true);
         write_status_line(state, "•", event->text,
                           state->color ? "\033[38;5;245m" : NULL);
+        break;
+    case TELOS_FRONTEND_CLIPBOARD:
+        {
+            const char *text = event->text;
+            size_t size = strlen(text);
+
+            if (size > sizeof(state->clipboard) - 1 -
+                           state->clipboard_size) {
+                state->clipboard_size = 0;
+                state->clipboard[0] = '\0';
+            }
+            if (size <= sizeof(state->clipboard) - 1 -
+                           state->clipboard_size) {
+                memcpy(state->clipboard + state->clipboard_size, text, size);
+                state->clipboard_size += size;
+                state->clipboard[state->clipboard_size] = '\0';
+            }
+        }
+        if (strcmp(event->name, "clipboard") == 0) {
+            write_clipboard(state);
+        }
         break;
     default:
         break;
@@ -1166,6 +1450,14 @@ static size_t handle_key(struct terminal_state *state, const char *data,
         state->input_cursor = state->input_size;
         return 3;
     }
+    if ((unsigned char)data[0] == 0x07U) {
+        if (state->worker_active) {
+            write_all(state->output_descriptor, "\a", 1);
+        } else if (!editor_external(state, error)) {
+            return 1;
+        }
+        return 1;
+    }
     if (key_sequence(data, size, "\033[3~")) {
         editor_delete(state);
         return 4;
@@ -1275,6 +1567,103 @@ static void disable_raw_mode(struct terminal_state *state)
     end_frame(state);
     tcsetattr(state->input_descriptor, TCSAFLUSH, &state->saved_terminal);
     state->raw_enabled = false;
+}
+
+static bool editor_external(struct terminal_state *state,
+                            struct telos_error **error)
+{
+    char path[] = "/tmp/telos-editor-XXXXXX";
+    const char *editor = getenv("VISUAL");
+    int descriptor;
+    pid_t child;
+    int status;
+    ssize_t received;
+    size_t used = 0;
+
+    if (editor == NULL || editor[0] == '\0') {
+        editor = getenv("EDITOR");
+    }
+    if (editor == NULL || editor[0] == '\0') {
+        editor = "vi";
+    }
+    descriptor = mkstemp(path);
+    if (descriptor < 0 ||
+        !write_all(descriptor, state->input, state->input_size) ||
+        close(descriptor) != 0) {
+        if (descriptor >= 0) {
+            close(descriptor);
+        }
+        unlink(path);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "External editor file could not be prepared");
+        return false;
+    }
+    disable_raw_mode(state);
+    child = fork();
+    if (child < 0) {
+        enable_raw_mode(state, error);
+        unlink(path);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "External editor process could not be created");
+        return false;
+    }
+    if (child == 0) {
+        execlp(editor, editor, path, (char *)NULL);
+        _exit(127);
+    }
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    if (!enable_raw_mode(state, error)) {
+        unlink(path);
+        return false;
+    }
+    descriptor = open(path, O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0) {
+        unlink(path);
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "External editor output could not be opened");
+        return false;
+    }
+    while (used < state->maximum_input_bytes) {
+        received = read(descriptor, state->input + used,
+                        state->maximum_input_bytes - used);
+        if (received < 0 && errno == EINTR) {
+            continue;
+        }
+        if (received < 0) {
+            close(descriptor);
+            unlink(path);
+            set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                      "External editor output could not be read");
+            return false;
+        }
+        if (received == 0) {
+            break;
+        }
+        used += (size_t)received;
+    }
+    if (used == state->maximum_input_bytes) {
+        char value;
+
+        if (read(descriptor, &value, 1) > 0) {
+            close(descriptor);
+            unlink(path);
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "External editor input is too large");
+            return false;
+        }
+    }
+    close(descriptor);
+    unlink(path);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, ECHILD,
+                  "External editor did not complete successfully");
+        return false;
+    }
+    state->input_size = used;
+    state->input_cursor = used;
+    state->input[used] = '\0';
+    return true;
 }
 
 static void write_header(struct terminal_state *state)
@@ -1430,6 +1819,10 @@ static bool plain_emit(const struct telos_frontend_event *event,
         write_text(plain->output_descriptor, "\n[notice] ");
         plain_write_sanitized(plain->output_descriptor, event->text);
         write_text(plain->output_descriptor, "\n");
+    } else if (event->kind == TELOS_FRONTEND_CLIPBOARD) {
+        write_text(plain->output_descriptor, "\n[clipboard] ");
+        plain_write_sanitized(plain->output_descriptor, event->text);
+        write_text(plain->output_descriptor, "\n");
     }
     return true;
 }
@@ -1483,6 +1876,40 @@ static bool run_plain_turn(struct terminal_state *state, const char *line,
     return result;
 }
 
+static bool run_plain_shell(struct terminal_state *state, const char *line,
+                            struct telos_error **error)
+{
+    const bool capture = line[1] == '!';
+    const char *command = line + (capture ? 2 : 1);
+    int status;
+
+    if (command[0] == '\0') {
+        write_text(state->output_descriptor,
+                   "[notice] Usage: !command or !!command\n");
+        return true;
+    }
+    if (!run_shell_command(state->session->working_directory, command,
+                           state->shell_output, sizeof(state->shell_output),
+                           &status, error)) {
+        return false;
+    }
+    write_text(state->output_descriptor, "! ");
+    plain_write_sanitized(state->output_descriptor, command);
+    write_text(state->output_descriptor, "\n");
+    plain_write_sanitized(state->output_descriptor, state->shell_output);
+    if (state->shell_output[0] != '\0' &&
+        state->shell_output[strlen(state->shell_output) - 1] != '\n') {
+        write_text(state->output_descriptor, "\n");
+    }
+    if (status != 0) {
+        dprintf(state->output_descriptor, "[shell exited with %d]\n", status);
+    }
+    if (capture && state->shell_output[0] != '\0') {
+        return run_plain_turn(state, state->shell_output, error);
+    }
+    return true;
+}
+
 static bool run_plain(struct terminal_state *state, struct telos_error **error)
 {
     char line[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
@@ -1519,6 +1946,12 @@ static bool run_plain(struct terminal_state *state, struct telos_error **error)
         }
         if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
             return true;
+        }
+        if (line[0] == '!') {
+            if (!run_plain_shell(state, line, error)) {
+                return false;
+            }
+            continue;
         }
         if (strcmp(line, "/help") == 0) {
             write_text(state->output_descriptor,
@@ -1602,6 +2035,8 @@ static const char *json_event_name(enum telos_frontend_event_kind kind)
         return "tool_failed";
     case TELOS_FRONTEND_NOTICE:
         return "notice";
+    case TELOS_FRONTEND_CLIPBOARD:
+        return "clipboard";
     default:
         return NULL;
     }
@@ -1682,6 +2117,7 @@ static bool json_emit(const struct telos_frontend_event *event,
     const struct json_context *json = context;
     const char *kind;
     bool tool_event;
+    bool clipboard_event;
 
     if (event == NULL || json == NULL) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
@@ -1697,8 +2133,10 @@ static bool json_emit(const struct telos_frontend_event *event,
     tool_event = event->kind == TELOS_FRONTEND_TOOL_STARTED ||
                  event->kind == TELOS_FRONTEND_TOOL_COMPLETED ||
                  event->kind == TELOS_FRONTEND_TOOL_FAILED;
+    clipboard_event = event->kind == TELOS_FRONTEND_CLIPBOARD;
     return json_write_event(json, kind, tool_event ? NULL : event->text,
-                            tool_event ? event->name : NULL, error);
+                            tool_event || clipboard_event ? event->name : NULL,
+                            error);
 }
 
 static bool run_json_turn(struct terminal_state *state, const char *line,
@@ -1742,6 +2180,45 @@ static bool run_json_turn(struct terminal_state *state, const char *line,
     return result;
 }
 
+static bool run_json_shell(struct terminal_state *state, const char *line,
+                           struct json_context *json,
+                           struct telos_error **error)
+{
+    const bool capture = line[1] == '!';
+    const char *command = line + (capture ? 2 : 1);
+    int status;
+    char status_text[64];
+
+    if (command[0] == '\0') {
+        return json_write_event(json, "notice",
+                                "Usage: !command or !!command", NULL,
+                                error);
+    }
+    if (!run_shell_command(state->session->working_directory, command,
+                           state->shell_output, sizeof(state->shell_output),
+                           &status, error)) {
+        return false;
+    }
+    if (!json_write_event(json, "shell", state->shell_output, command,
+                          error)) {
+        return false;
+    }
+    if (snprintf(status_text, sizeof(status_text), "shell exited with %d",
+                 status) >= (int)sizeof(status_text)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Shell status message is too long");
+        return false;
+    }
+    if (status != 0 && !json_write_event(json, "notice", status_text, NULL,
+                                         error)) {
+        return false;
+    }
+    if (capture && state->shell_output[0] != '\0') {
+        return run_json_turn(state, state->shell_output, json, error);
+    }
+    return true;
+}
+
 static bool run_json(struct terminal_state *state, struct telos_error **error)
 {
     struct json_context json = {
@@ -1773,6 +2250,12 @@ static bool run_json(struct terminal_state *state, struct telos_error **error)
         }
         if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
             return true;
+        }
+        if (line[0] == '!') {
+            if (!run_json_shell(state, line, &json, error)) {
+                return false;
+            }
+            continue;
         }
         if (strcmp(line, "/help") == 0) {
             if (!json_write_event(
@@ -1903,7 +2386,9 @@ static bool run_rpc(struct terminal_state *state, struct telos_error **error)
             return true;
         }
         if (kind == RPC_REQUEST_PROMPT) {
-            if (!run_json_turn(state, payload, &json, error)) {
+            if (payload[0] == '!'
+                ? !run_json_shell(state, payload, &json, error)
+                : !run_json_turn(state, payload, &json, error)) {
                 return false;
             }
             continue;
