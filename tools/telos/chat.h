@@ -10,6 +10,7 @@ bool telos_chat_run(const struct telos_config *config,
                     const char *current_directory,
                     const char *initial_prompt,
                     bool single_turn,
+                    bool json_output,
                     struct telos_error **error);
 
 #endif

@@ -64,6 +64,14 @@ build/tools/telos run 'reply with a short status'
 The process exits non-zero when configuration, transport, Provider parsing,
 cancellation, or the Agent Turn fails.
 
+Use `--json` when another process needs machine-readable event output. Each
+line is a JSON object such as `user`, `text_delta`, `tool_started`, `notice`,
+or `turn_completed`:
+
+```sh
+build/tools/telos --json run 'reply with a short status'
+```
+
 ## Use a local Responses server
 
 Telos accepts plain HTTP only for the loopback names `localhost`,

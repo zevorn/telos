@@ -17,6 +17,7 @@
 
 #include <telos/plugins/terminal_frontend.h>
 #include <telos/command.h>
+#include <telos/value.h>
 
 #define TERMINAL_EVENT_CAPACITY 64U
 #define TERMINAL_EVENT_TEXT_SIZE 2048U
@@ -94,8 +95,15 @@ struct plain_context {
     bool response_started;
 };
 
+struct json_context {
+    int output_descriptor;
+};
+
 static bool plain_emit(const struct telos_frontend_event *event,
                        void *context, struct telos_error **error);
+
+static bool json_emit(const struct telos_frontend_event *event,
+                      void *context, struct telos_error **error);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -1579,6 +1587,221 @@ static bool run_plain(struct terminal_state *state, struct telos_error **error)
     }
 }
 
+static const char *json_event_name(enum telos_frontend_event_kind kind)
+{
+    switch (kind) {
+    case TELOS_FRONTEND_RESPONSE_STARTED:
+        return "response_started";
+    case TELOS_FRONTEND_TEXT_DELTA:
+        return "text_delta";
+    case TELOS_FRONTEND_TOOL_STARTED:
+        return "tool_started";
+    case TELOS_FRONTEND_TOOL_COMPLETED:
+        return "tool_completed";
+    case TELOS_FRONTEND_TOOL_FAILED:
+        return "tool_failed";
+    case TELOS_FRONTEND_NOTICE:
+        return "notice";
+    default:
+        return NULL;
+    }
+}
+
+static bool json_write_event(const struct json_context *json,
+                             const char *kind, const char *text,
+                             const char *name, struct telos_error **error)
+{
+    const char *keys[3] = {"event", NULL, NULL};
+    const struct telos_value *values[3] = {0};
+    struct telos_value *owned[3] = {0};
+    struct telos_value *root = NULL;
+    char *output = NULL;
+    size_t count = 1;
+    size_t size;
+    bool result = false;
+
+    owned[0] = telos_value_new_string(kind);
+    if (owned[0] == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "JSON event allocation failed");
+        goto cleanup;
+    }
+    values[0] = owned[0];
+    if (text != NULL) {
+        keys[count] = "text";
+        values[count] = owned[count] = telos_value_new_string(text);
+        if (owned[count] == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                      "JSON event text allocation failed");
+            goto cleanup;
+        }
+        ++count;
+    }
+    if (name != NULL) {
+        keys[count] = "name";
+        values[count] = owned[count] = telos_value_new_string(name);
+        if (owned[count] == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                      "JSON event name allocation failed");
+            goto cleanup;
+        }
+        ++count;
+    }
+    root = telos_value_new_object(keys, values, count);
+    if (root == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "JSON event object allocation failed");
+        goto cleanup;
+    }
+    size = telos_value_json_size(root);
+    output = malloc(size);
+    if (output == NULL || !telos_value_write_json(root, output, size, NULL,
+                                                   error) ||
+        !write_all(json->output_descriptor, output, size - 1) ||
+        !write_all(json->output_descriptor, "\n", 1)) {
+        if (error != NULL && *error == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                      "JSON event could not be written");
+        }
+        goto cleanup;
+    }
+    result = true;
+
+cleanup:
+    free(output);
+    telos_value_release(root);
+    for (size_t index = 0; index < count; ++index) {
+        telos_value_release(owned[index]);
+    }
+    return result;
+}
+
+static bool json_emit(const struct telos_frontend_event *event,
+                      void *context, struct telos_error **error)
+{
+    const struct json_context *json = context;
+    const char *kind;
+    bool tool_event;
+
+    if (event == NULL || json == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "JSON Frontend Event is invalid");
+        return false;
+    }
+    kind = json_event_name(event->kind);
+    if (kind == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                  "JSON Frontend Event kind is invalid");
+        return false;
+    }
+    tool_event = event->kind == TELOS_FRONTEND_TOOL_STARTED ||
+                 event->kind == TELOS_FRONTEND_TOOL_COMPLETED ||
+                 event->kind == TELOS_FRONTEND_TOOL_FAILED;
+    return json_write_event(json, kind, tool_event ? NULL : event->text,
+                            tool_event ? event->name : NULL, error);
+}
+
+static bool run_json_turn(struct terminal_state *state, const char *line,
+                          struct json_context *json,
+                          struct telos_error **error)
+{
+    struct telos_cancel *cancel = telos_cancel_create();
+    struct telos_error *turn_error = NULL;
+    bool result;
+
+    if (cancel == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "JSON turn cancellation allocation failed");
+        return false;
+    }
+    if (!json_write_event(json, "user", line, NULL, error)) {
+        telos_cancel_release(cancel);
+        return false;
+    }
+    result = state->session->turn(line, cancel, json_emit, json,
+                                  state->session->turn_context, &turn_error);
+    if (!result) {
+        if (!json_write_event(json, "error",
+                              turn_error == NULL ? "Agent turn failed"
+                                                  : telos_error_message(
+                                                        turn_error),
+                              NULL, error)) {
+            telos_error_release(turn_error);
+            telos_cancel_release(cancel);
+            return false;
+        }
+        if (error != NULL && *error == NULL) {
+            *error = turn_error;
+            turn_error = NULL;
+        }
+    } else if (!json_write_event(json, "turn_completed", NULL, NULL, error)) {
+        result = false;
+    }
+    telos_error_release(turn_error);
+    telos_cancel_release(cancel);
+    return result;
+}
+
+static bool run_json(struct terminal_state *state, struct telos_error **error)
+{
+    struct json_context json = {
+        .output_descriptor = state->output_descriptor,
+    };
+    char line[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+
+    if (state->session->initial_prompt != NULL &&
+        state->session->initial_prompt[0] != '\0' &&
+        !run_json_turn(state, state->session->initial_prompt, &json, error)) {
+        return false;
+    }
+    if (state->session->single_turn) {
+        return true;
+    }
+    while (true) {
+        ssize_t size = read_plain_line(state->input_descriptor, line,
+                                       state->maximum_input_bytes + 1);
+        bool handled = false;
+        bool exit_requested = false;
+
+        if (size < 0) {
+            set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                      "JSON input could not be read");
+            return false;
+        }
+        if (size == 0) {
+            return true;
+        }
+        if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
+            return true;
+        }
+        if (strcmp(line, "/help") == 0) {
+            if (!json_write_event(
+                    &json, "notice",
+                    "Use /help or /quit; commands are listed by the session",
+                    NULL, error)) {
+                return false;
+            }
+            continue;
+        }
+        if (state->session->commands != NULL && line[0] == '/') {
+            if (!telos_command_registry_dispatch(
+                    state->session->commands, line, NULL, json_emit, &json,
+                    &handled, &exit_requested, error)) {
+                return false;
+            }
+            if (handled) {
+                if (exit_requested) {
+                    return true;
+                }
+                continue;
+            }
+        }
+        if (!run_json_turn(state, line, &json, error)) {
+            return false;
+        }
+    }
+}
+
 bool telos_terminal_frontend_run(const telos_terminal_frontend_config *config,
                                  struct telos_error **error)
 {
@@ -1626,8 +1849,10 @@ bool telos_terminal_frontend_run(const telos_terminal_frontend_config *config,
     pthread_cond_init(&state->queue_changed, NULL);
     setlocale(LC_CTYPE, "");
 
-    result = interactive ? run_interactive(state, error)
-                         : run_plain(state, error);
+    result = config->json_output
+                 ? run_json(state, error)
+                 : (interactive ? run_interactive(state, error)
+                                : run_plain(state, error));
 
     pthread_mutex_lock(&state->queue_mutex);
     state->queue_shutdown = true;

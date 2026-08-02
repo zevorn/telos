@@ -1941,6 +1941,7 @@ bool telos_chat_run(const struct telos_config *config,
                     const char *current_directory,
                     const char *initial_prompt,
                     bool single_turn,
+                    bool json_output,
                     struct telos_error **error)
 {
     struct chat_session chat = {0};
@@ -1989,6 +1990,7 @@ bool telos_chat_run(const struct telos_config *config,
             .input_descriptor = STDIN_FILENO,
             .output_descriptor = STDOUT_FILENO,
             .force_plain = single_turn,
+            .json_output = json_output,
         };
 
         result = telos_terminal_frontend_run(&frontend, error);

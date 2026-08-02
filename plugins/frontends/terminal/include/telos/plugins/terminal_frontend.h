@@ -12,6 +12,7 @@ struct telos_terminal_frontend_config {
     int output_descriptor;
     size_t maximum_input_bytes;
     bool force_plain;
+    bool json_output;
 };
 
 typedef struct telos_terminal_frontend_config telos_terminal_frontend_config;

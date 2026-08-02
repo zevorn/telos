@@ -35,10 +35,29 @@ HOME="$temporary/home" "$telos" \
     --model local-model \
     --endpoint "$endpoint" \
     run hello >"$temporary/run.output"
+"$server" >"$temporary/json-port" &
+server_pid=$!
+attempt=0
+while ! test -s "$temporary/json-port"; do
+    attempt=$((attempt + 1))
+    if test "$attempt" -ge 100; then
+        echo "JSON Agent fixture server did not start" >&2
+        exit 1
+    fi
+    sleep 0.01
+done
+json_port=$(sed -n '1p' "$temporary/json-port")
+json_endpoint="http://127.0.0.1:$json_port/v1"
+HOME="$temporary/home" "$telos" --json \
+    --model local-model \
+    --endpoint "$json_endpoint" \
+    run hello >"$temporary/json.output"
 wait "$server_pid"
 server_pid=
 grep -Fq "You > hello" "$temporary/run.output"
 grep -Fq "Telos > hello from functional test" "$temporary/run.output"
+grep -Fq '{"event":"user","text":"hello"}' "$temporary/json.output"
+grep -Fq '{"event":"turn_completed"}' "$temporary/json.output"
 
 printf '/quit\n' | HOME="$temporary/home" \
     TELOS_AGENT_MODEL=local-model \

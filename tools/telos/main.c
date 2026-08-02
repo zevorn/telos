@@ -555,12 +555,8 @@ static int agent_command(const struct cli_options *options,
     struct telos_error *error = NULL;
     int result;
 
-    if (options->json) {
-        return unsupported(options,
-                           "Agent terminal output does not support --json");
-    }
     if (telos_chat_run(config, home_directory, current_directory,
-                       initial_prompt, single_turn, &error)) {
+                       initial_prompt, single_turn, options->json, &error)) {
         return 0;
     }
     result = print_error(false, 3, error, "Agent terminal failed");

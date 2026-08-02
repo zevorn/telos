@@ -62,6 +62,12 @@ Running `telos` without a command opens the interactive terminal UI. Use
 with `TELOS_AGENT_ENDPOINT=http://127.0.0.1:PORT/v1`; loopback HTTP does not
 require a real API key.
 
+For automation, add `--json` to emit one bounded JSON event per line:
+
+```sh
+build/tools/telos --json run 'your prompt'
+```
+
 Inside the TUI, type `login` or `/login` to authenticate with an OpenAI
 ChatGPT account. API-key authentication remains available through
 `OPENAI_API_KEY`. See [the OpenAI login guide](docs/openai-login.md) for the
