@@ -163,11 +163,12 @@ int main(int argc, char **argv)
         "dev.zevorn.openai-codex-auth",
         "dev.zevorn.terminal-frontend", "dev.zevorn.curl-transport",
         "dev.zevorn.model-catalog", "dev.zevorn.jsonl-store",
+        "dev.zevorn.api-key-auth",
     };
     size_t plugin_count;
     struct telos_registry *registry;
     struct telos_host_api_v1 host;
-    struct telos_plugin_module *modules[13] = {0};
+    struct telos_plugin_module *modules[14] = {0};
     struct telos_registry_generation *generation;
     struct telos_value *empty = telos_value_new_object(NULL, NULL, 0);
     struct telos_value *capacity = telos_value_new_integer(2);
@@ -202,7 +203,7 @@ int main(int argc, char **argv)
     struct telos_value *jsonl =
         telos_value_new_object(markdown_keys, jsonl_values, 1);
 
-    assert(argc >= 19 && argc <= 27 && argc % 2 == 1);
+    assert(argc >= 19 && argc <= 29 && argc % 2 == 1);
     plugin_count = ((size_t)argc - 1) / 2;
     assert(descriptor >= 0);
     assert(jsonl_descriptor >= 0);
@@ -343,6 +344,33 @@ int main(int argc, char **argv)
         assert(telos_model_catalog_current(&models) == NULL);
         assert(telos_model_catalog_find(&models, "openai", "gpt-5") !=
                NULL);
+    }
+    if (plugin_count > 13) {
+        const char *authentication_ids[] = {
+            "dev.zevorn.deepseek-api-key-auth",
+            "dev.zevorn.zai-api-key-auth",
+            "dev.zevorn.anthropic-api-key-auth",
+        };
+
+        for (size_t index = 0;
+             index < sizeof(authentication_ids) /
+                        sizeof(authentication_ids[0]);
+             ++index) {
+            const struct telos_extension_descriptor *authentication =
+                find_extension(generation, TELOS_EXTENSION_AUTHENTICATION,
+                               authentication_ids[index]);
+            const struct telos_authentication_definition_v1 *definition =
+                authentication->implementation;
+
+            assert(definition->struct_size >= sizeof(*definition));
+            assert(strcmp(definition->id, authentication_ids[index]) == 0);
+            assert(definition->create != NULL);
+            assert(definition->destroy != NULL);
+            assert(definition->login != NULL);
+            assert(definition->logout != NULL);
+            assert(definition->status != NULL);
+            assert(definition->resolve != NULL);
+        }
     }
 
     telos_registry_generation_release(generation);

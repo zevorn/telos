@@ -57,6 +57,15 @@ printf '/login status\n/quit\n' | HOME="$temporary/home" \
     "$telos" chat >"$temporary/login-ready.output"
 grep -Fq "OpenAI is logged out" "$temporary/login-ready.output"
 
+printf '/login status\n/login\n/login status\n/logout\n/login status\n/quit\n' \
+    | HOME="$temporary/home" TELOS_AGENT_PROVIDER=deepseek \
+    TELOS_AGENT_MODEL=unconfigured DEEPSEEK_API_KEY=functional-key \
+    "$telos" chat >"$temporary/api-key-login.output"
+grep -Fq "DeepSeek is logged out" "$temporary/api-key-login.output"
+grep -Fq "DeepSeek login completed" "$temporary/api-key-login.output"
+grep -Fq "DeepSeek is logged in" "$temporary/api-key-login.output"
+grep -Fq "DeepSeek logout completed" "$temporary/api-key-login.output"
+
 printf '[{"role":"user","content":"saved"}]\n' \
     >"$temporary/import.json"
 {

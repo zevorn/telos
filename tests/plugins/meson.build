@@ -270,6 +270,18 @@ if posix_host_plugins_available
         suite: 'plugins',
         timeout: 30,
     )
+
+    test_api_key_auth = executable(
+        'test-api-key-auth',
+        'test_api_key_auth.c',
+        dependencies: telos_api_key_auth_plugin_dep,
+    )
+
+    test(
+        'api-key-auth',
+        test_api_key_auth,
+        suite: 'plugins',
+    )
 endif
 
 if terminal_frontend_available
@@ -471,6 +483,11 @@ if get_option('shared_plugins')
     official_plugin_module_paths += [telos_jsonl_store_module.full_path()]
     official_plugin_source_paths += [
         meson.project_source_root() / 'plugins/stores/jsonl',
+    ]
+    official_plugin_modules += [telos_api_key_auth_module]
+    official_plugin_module_paths += [telos_api_key_auth_module.full_path()]
+    official_plugin_source_paths += [
+        meson.project_source_root() / 'plugins/authentication/api-key',
     ]
 
     test_official_plugins = executable(
