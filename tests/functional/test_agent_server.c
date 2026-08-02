@@ -29,7 +29,7 @@ static bool send_all(int descriptor, const char *data, size_t size)
 
 int main(void)
 {
-    static const char response[] =
+    static const char responses_response[] =
         "event: response.created\n"
         "data: {\"type\":\"response.created\",\"response\":"
         "{\"id\":\"resp_functional\"}}\n\n"
@@ -40,6 +40,12 @@ int main(void)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":"
         "{\"id\":\"resp_functional\"}}\n\n"
+        "data: [DONE]\n\n";
+    static const char chat_response[] =
+        "data: {\"id\":\"chatcmpl_functional\",\"choices\":[{"
+        "\"index\":0,\"delta\":{\"content\":"
+        "\"hello from chat functional test\"},\"finish_reason\":"
+        "\"stop\"}]}\n\n"
         "data: [DONE]\n\n";
     struct sockaddr_in address = {
         .sin_family = AF_INET,
@@ -57,6 +63,8 @@ int main(void)
     int result = 1;
     int enabled = 1;
     int header_size;
+    const char *response;
+    bool chat_request;
 
     listener = socket(AF_INET, SOCK_STREAM, 0);
     if (listener < 0 ||
@@ -93,21 +101,31 @@ int main(void)
             break;
         }
     }
-    if (strstr(request, "POST /v1/responses HTTP/") == NULL ||
-        strstr(request, "\"model\":\"local-model\"") == NULL ||
+    chat_request = strstr(request, "POST /v1/chat/completions HTTP/") != NULL;
+    if (!chat_request && strstr(request, "POST /v1/responses HTTP/") == NULL) {
+        goto cleanup;
+    }
+    if ((!chat_request &&
+         strstr(request, "\"model\":\"local-model\"") == NULL) ||
+        (chat_request &&
+         strstr(request, "\"model\":\"deepseek-chat\"") == NULL) ||
         strstr(request, "\"content\":\"hello\"") == NULL ||
         strstr(request, "# KERNEL CONTRACT") == NULL) {
         goto cleanup;
     }
+    if (chat_request && strstr(request, "\"messages\"") == NULL) {
+        goto cleanup;
+    }
+    response = chat_request ? chat_response : responses_response;
     header_size = snprintf(header, sizeof(header),
                            "HTTP/1.1 200 OK\r\n"
                            "Content-Type: text/event-stream\r\n"
                            "Content-Length: %zu\r\n"
                            "Connection: close\r\n\r\n",
-                           sizeof(response) - 1);
+                           strlen(response));
     if (header_size <= 0 || (size_t)header_size >= sizeof(header) ||
         !send_all(client, header, (size_t)header_size) ||
-        !send_all(client, response, sizeof(response) - 1)) {
+        !send_all(client, response, strlen(response))) {
         goto cleanup;
     }
     result = 0;

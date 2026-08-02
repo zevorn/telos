@@ -15,6 +15,7 @@
 #include <telos/plugins/curl_transport.h>
 #include <telos/plugins/model_catalog.h>
 #include <telos/plugins/openai_codex_auth.h>
+#include <telos/plugins/openai_chat.h>
 #include <telos/plugins/openai_responses.h>
 #include <telos/plugins/project_guidance.h>
 #include <telos/plugins/terminal_frontend.h>
@@ -35,7 +36,9 @@ struct chat_session {
     const struct telos_authentication_definition_v1 *authentication_definition;
     struct telos_authentication *authentication;
     struct telos_secret_broker *secret_broker;
-    struct telos_openai_responses_provider *provider;
+    void *provider_context;
+    telos_provider_dispatch_fn provider_dispatch;
+    void (*provider_destroy)(void *provider);
     struct telos_registry *registry;
     struct telos_registry_generation *generation;
     struct telos_capability_broker *capability_broker;
@@ -139,14 +142,20 @@ static char *resolve_secret(const char *reference, const char *target,
 {
     struct chat_session *chat = context;
     const char *value = getenv("TELOS_AGENT_API_KEY");
+    const char *provider;
 
-    if (strcmp(reference, "secret:provider.openai") != 0 ||
-        strcmp(target, "provider.openai") != 0) {
+    if (reference == NULL || target == NULL ||
+        strncmp(target, "provider.", sizeof("provider.") - 1) != 0 ||
+        strncmp(reference, "secret:", sizeof("secret:") - 1) != 0 ||
+        strcmp(reference + sizeof("secret:") - 1, target) != 0) {
         set_error(error, TELOS_ERROR_DOMAIN_PERMISSION, EACCES,
                   "Agent secret Reference is not authorized");
         return NULL;
     }
-    if (!chat->loopback_endpoint || chat->loopback_authentication) {
+    provider = target + sizeof("provider.") - 1;
+    if (strcmp(provider, "openai") == 0 &&
+        chat->authentication_definition != NULL &&
+        (!chat->loopback_endpoint || chat->loopback_authentication)) {
         struct telos_authentication_status status;
 
         if (chat->authentication_definition->status(chat->authentication,
@@ -159,15 +168,24 @@ static char *resolve_secret(const char *reference, const char *target,
             return NULL;
         }
     }
-    if (value == NULL || value[0] == '\0') {
-        value = getenv("OPENAI_API_KEY");
+    if (strcmp(provider, "openai") == 0) {
+        if (value == NULL || value[0] == '\0') {
+            value = getenv("OPENAI_API_KEY");
+        }
+    } else if (strcmp(provider, "deepseek") == 0) {
+        value = getenv("DEEPSEEK_API_KEY");
+    } else if (strcmp(provider, "zai") == 0) {
+        value = getenv("ZAI_API_KEY");
+        if (value == NULL || value[0] == '\0') {
+            value = getenv("Z_AI_API_KEY");
+        }
     }
     if ((value == NULL || value[0] == '\0') && chat->loopback_endpoint) {
         value = "local";
     }
     if (value == NULL || value[0] == '\0') {
         set_error(error, TELOS_ERROR_DOMAIN_IO, ENOENT,
-                  "TELOS_AGENT_API_KEY or OPENAI_API_KEY is required");
+                  "Provider API credentials are required");
         return NULL;
     }
     return copy_text(value);
@@ -178,6 +196,10 @@ authentication_signed_in(const struct chat_session *chat,
                          struct telos_authentication_status *status,
                          struct telos_error **error)
 {
+    if (chat->authentication_definition == NULL ||
+        chat->authentication == NULL) {
+        return false;
+    }
     if (!chat->authentication_definition->status(chat->authentication,
                                                   status, error)) {
         return false;
@@ -188,17 +210,60 @@ authentication_signed_in(const struct chat_session *chat,
 static bool create_provider(struct chat_session *chat,
                             struct telos_error **error)
 {
+    const struct telos_model_descriptor *model = chat->selected_model;
+    const char *provider_name =
+        model == NULL ? chat->configured_provider : model->provider;
+    const char *secret_provider;
+    const char *endpoint = chat->configured_endpoint;
     const char *capabilities[] = {
         "network.https",
-        "secret.use:provider.openai",
+        NULL,
     };
+    char secret_capability[96];
+    char secret_reference[96];
     struct telos_authentication_status status;
-    struct telos_openai_responses_provider *provider;
+    void *provider_context = NULL;
+    telos_provider_dispatch_fn provider_dispatch = NULL;
+    void (*provider_destroy)(void *provider) = NULL;
     const struct telos_transport_header *headers = NULL;
-    const char *endpoint = chat->configured_endpoint;
     size_t header_count = 0;
+    int written;
 
-    if ((!chat->loopback_endpoint || chat->loopback_authentication) &&
+    if (model == NULL || provider_name == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Agent model selection is incomplete");
+        return false;
+    }
+    if (strcmp(provider_name, "openai") == 0) {
+        secret_provider = "openai";
+    } else if (strcmp(provider_name, "deepseek") == 0) {
+        secret_provider = "deepseek";
+        if (strcmp(endpoint, "https://api.openai.com/v1") == 0) {
+            endpoint = "https://api.deepseek.com";
+        }
+    } else if (strcmp(provider_name, "zai") == 0) {
+        secret_provider = "zai";
+        if (strcmp(endpoint, "https://api.openai.com/v1") == 0) {
+            endpoint = "https://api.z.ai/api/paas/v4";
+        }
+    } else {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "The selected Provider Plugin is not available");
+        return false;
+    }
+    written = snprintf(secret_capability, sizeof(secret_capability),
+                       "secret.use:provider.%s", secret_provider);
+    if (written < 0 || (size_t)written >= sizeof(secret_capability) ||
+        snprintf(secret_reference, sizeof(secret_reference), "secret:%s",
+                 secret_capability + sizeof("secret.use:") - 1) < 0) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Provider secret target is too long");
+        return false;
+    }
+    capabilities[1] = secret_capability;
+
+    if (model->api == TELOS_MODEL_API_OPENAI_RESPONSES &&
+        (!chat->loopback_endpoint || chat->loopback_authentication) &&
         authentication_signed_in(chat, &status, error)) {
         chat->authentication_headers[0] =
             (struct telos_transport_header){
@@ -225,15 +290,16 @@ static bool create_provider(struct chat_session *chat,
         if (!chat->loopback_endpoint) {
             endpoint = TELOS_OPENAI_CODEX_RESPONSES_ENDPOINT;
         }
-    } else if ((!chat->loopback_endpoint || chat->loopback_authentication) &&
+    } else if (model->api == TELOS_MODEL_API_OPENAI_RESPONSES &&
+               (!chat->loopback_endpoint || chat->loopback_authentication) &&
                error != NULL && *error != NULL) {
         return false;
     }
-    {
+    if (model->api == TELOS_MODEL_API_OPENAI_RESPONSES) {
         const struct telos_openai_responses_config config = {
             .model = chat->model,
             .endpoint = endpoint,
-            .secret_reference = "secret:provider.openai",
+            .secret_reference = secret_reference,
             .secret_broker = chat->secret_broker,
             .capabilities = capabilities,
             .capability_count = 2,
@@ -244,13 +310,43 @@ static bool create_provider(struct chat_session *chat,
             .unknown_event_policy = TELOS_OPENAI_UNKNOWN_EVENT_IGNORE,
         };
 
-        provider = telos_openai_provider_create(&config, error);
-    }
-    if (provider == NULL) {
+        provider_context = telos_openai_provider_create(&config, error);
+        provider_dispatch = telos_openai_provider_dispatch;
+        provider_destroy = (void (*)(void *))telos_openai_provider_destroy;
+    } else if (model->api == TELOS_MODEL_API_OPENAI_CHAT) {
+        const struct telos_openai_chat_config config = {
+            .model = chat->model,
+            .endpoint = endpoint,
+            .secret_reference = secret_reference,
+            .secret_target = secret_reference + sizeof("secret:") - 1,
+            .secret_broker = chat->secret_broker,
+            .capabilities = capabilities,
+            .capability_count = 2,
+            .headers = headers,
+            .header_count = header_count,
+            .send = telos_curl_transport_send,
+            .transport_context = &chat->transport,
+            .unknown_event_policy = TELOS_OPENAI_CHAT_UNKNOWN_EVENT_IGNORE,
+        };
+
+        provider_context = telos_openai_chat_provider_create(&config, error);
+        provider_dispatch = telos_openai_chat_provider_dispatch;
+        provider_destroy =
+            (void (*)(void *))telos_openai_chat_provider_destroy;
+    } else {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "The selected Provider Plugin API is not available");
         return false;
     }
-    telos_openai_provider_destroy(chat->provider);
-    chat->provider = provider;
+    if (provider_context == NULL) {
+        return false;
+    }
+    if (chat->provider_destroy != NULL) {
+        chat->provider_destroy(chat->provider_context);
+    }
+    chat->provider_context = provider_context;
+    chat->provider_dispatch = provider_dispatch;
+    chat->provider_destroy = provider_destroy;
     return true;
 }
 
@@ -512,6 +608,12 @@ static bool login_command(struct chat_session *chat,
                           struct observer_context *observer,
                           struct telos_error **error)
 {
+    if (chat->authentication_definition == NULL ||
+        chat->authentication == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "This Provider uses API-key authentication");
+        return false;
+    }
     if (!chat->authentication_definition->login(
             chat->authentication, cancel, observe_authentication, observer,
             error)) {
@@ -524,6 +626,12 @@ static bool logout_command(struct chat_session *chat,
                            struct observer_context *observer,
                            struct telos_error **error)
 {
+    if (chat->authentication_definition == NULL ||
+        chat->authentication == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "This Provider uses API-key authentication");
+        return false;
+    }
     if (!chat->authentication_definition->logout(chat->authentication,
                                                   error)) {
         return false;
@@ -541,6 +649,13 @@ static bool login_status_command(const struct chat_session *chat,
 {
     struct telos_authentication_status status;
     char message[512];
+
+    if (chat->authentication_definition == NULL ||
+        chat->authentication == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "This Provider uses API-key authentication");
+        return false;
+    }
 
     if (!chat->authentication_definition->status(chat->authentication,
                                                   &status, error)) {
@@ -642,11 +757,6 @@ static bool model_command(const char *arguments,
                   "Selected model is unavailable");
         return false;
     }
-    if (model->api != TELOS_MODEL_API_OPENAI_RESPONSES) {
-        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
-                  "The selected Provider Plugin is not available yet");
-        return false;
-    }
     chat->selected_model = model;
     chat->model = model->id;
     if (!create_provider(chat, error)) {
@@ -724,7 +834,7 @@ static bool chat_turn(const char *input, const struct telos_cancel *cancel,
     struct telos_value *items = NULL;
     bool success = false;
 
-    if (chat->provider == NULL) {
+    if (chat->provider_context == NULL || chat->provider_dispatch == NULL) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
                   "Set agent.model or TELOS_AGENT_MODEL before sending "
                   "a prompt");
@@ -752,8 +862,8 @@ static bool chat_turn(const char *input, const struct telos_cancel *cancel,
         const struct telos_agent_options options = {
             .registry_generation = chat->generation,
             .capability_broker = chat->capability_broker,
-            .dispatch = telos_openai_provider_dispatch,
-            .provider_context = chat->provider,
+            .dispatch = chat->provider_dispatch,
+            .provider_context = chat->provider_context,
             .observe = observe_agent,
             .observe_context = &observer,
             .maximum_provider_rounds = 8,
@@ -824,9 +934,14 @@ static bool select_configured_model(struct chat_session *chat,
                                     const char *model,
                                     struct telos_error **error)
 {
-    const char *provider = strcmp(provider_name, "openai") == 0
+    const char *provider =
+        strcmp(provider_name, "openai") == 0 ||
+        strcmp(provider_name, "openai-responses") == 0 ||
+        strcmp(provider_name, "dev.zevorn.openai-responses") == 0
                                ? "openai"
-                               : (strcmp(provider_name, "openai-responses") == 0
+                               : (strcmp(provider_name, "openai-chat") == 0 ||
+                                          strcmp(provider_name,
+                                                 "dev.zevorn.openai-chat") == 0
                                       ? "openai"
                                       : provider_name);
 
@@ -877,7 +992,9 @@ static bool initialize_chat(struct chat_session *chat,
     if (provider_name == NULL ||
         (strcmp(provider_name, "openai") != 0 &&
          strcmp(provider_name, "openai-responses") != 0 &&
-         strcmp(provider_name, "dev.zevorn.openai-responses") != 0)) {
+         strcmp(provider_name, "dev.zevorn.openai-responses") != 0 &&
+         strcmp(provider_name, "deepseek") != 0 &&
+         strcmp(provider_name, "zai") != 0)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
                   "The configured Agent Provider is not available");
         return false;
@@ -900,28 +1017,30 @@ static bool initialize_chat(struct chat_session *chat,
     chat->configured_endpoint = endpoint;
     chat->transport.timeout_milliseconds =
         TELOS_CURL_DEFAULT_TIMEOUT_MILLISECONDS;
-    if (snprintf(authentication_directory, sizeof(authentication_directory),
-                 "%s/.telos", home_directory) >=
-        (int)sizeof(authentication_directory)) {
-        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
-                  "Agent authentication state path is too long");
-        return false;
-    }
-    chat->authentication_definition =
-        telos_openai_codex_authentication_definition();
-    {
-        const struct telos_authentication_config authentication_config = {
-            .state_directory = authentication_directory,
-            .service_endpoint = authentication_endpoint,
-            .send = telos_curl_transport_send,
-            .transport_context = &chat->transport,
-        };
+    if (strcmp(chat->configured_provider, "openai") == 0) {
+        if (snprintf(authentication_directory, sizeof(authentication_directory),
+                     "%s/.telos", home_directory) >=
+            (int)sizeof(authentication_directory)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
+                      "Agent authentication state path is too long");
+            return false;
+        }
+        chat->authentication_definition =
+            telos_openai_codex_authentication_definition();
+        {
+            const struct telos_authentication_config authentication_config = {
+                .state_directory = authentication_directory,
+                .service_endpoint = authentication_endpoint,
+                .send = telos_curl_transport_send,
+                .transport_context = &chat->transport,
+            };
 
-        chat->authentication = chat->authentication_definition->create(
-            &authentication_config, error);
-    }
-    if (chat->authentication == NULL) {
-        return false;
+            chat->authentication = chat->authentication_definition->create(
+                &authentication_config, error);
+        }
+        if (chat->authentication == NULL) {
+            return false;
+        }
     }
     chat->secret_broker = telos_secret_broker_create(resolve_secret, chat,
                                                       error);
@@ -965,7 +1084,9 @@ static void clear_chat(struct chat_session *chat)
     telos_capability_broker_destroy(chat->capability_broker);
     telos_registry_generation_release(chat->generation);
     telos_registry_destroy(chat->registry);
-    telos_openai_provider_destroy(chat->provider);
+    if (chat->provider_destroy != NULL) {
+        chat->provider_destroy(chat->provider_context);
+    }
     telos_secret_broker_destroy(chat->secret_broker);
     if (chat->authentication_definition != NULL) {
         chat->authentication_definition->destroy(chat->authentication);

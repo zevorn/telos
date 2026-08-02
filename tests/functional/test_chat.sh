@@ -56,3 +56,27 @@ printf '/login status\n/quit\n' | HOME="$temporary/home" \
     TELOS_AGENT_MODEL=unconfigured \
     "$telos" chat >"$temporary/login-ready.output"
 grep -Fq "OpenAI is logged out" "$temporary/login-ready.output"
+
+"$server" >"$temporary/chat-port" &
+server_pid=$!
+attempt=0
+while ! test -s "$temporary/chat-port"; do
+    attempt=$((attempt + 1))
+    if test "$attempt" -ge 100; then
+        echo "Chat Provider fixture server did not start" >&2
+        exit 1
+    fi
+    sleep 0.01
+done
+
+chat_port=$(sed -n '1p' "$temporary/chat-port")
+chat_endpoint="http://127.0.0.1:$chat_port/v1"
+HOME="$temporary/home" "$telos" \
+    --provider deepseek \
+    --model deepseek-chat \
+    --endpoint "$chat_endpoint" \
+    run hello >"$temporary/chat-provider.output"
+wait "$server_pid"
+server_pid=
+grep -Fq "Telos > hello from chat functional test" \
+    "$temporary/chat-provider.output"
