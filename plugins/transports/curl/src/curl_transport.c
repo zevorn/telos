@@ -6,8 +6,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include <telos/plugins/curl_transport.h>
+
+#define CURL_TRANSPORT_MAXIMUM_HEADERS 16U
+#define CURL_TRANSPORT_HEADER_SIZE 4096U
 
 struct receive_context {
     telos_transport_chunk_fn receive;
@@ -56,6 +60,66 @@ static bool url_allowed(const char *url)
     host = url + 7;
     return host_matches(host, "localhost") ||
            host_matches(host, "127.0.0.1") || host_matches(host, "[::1]");
+}
+
+static bool header_name_valid(const char *name)
+{
+    if (name == NULL || name[0] == '\0' ||
+        strcasecmp(name, "Authorization") == 0 ||
+        strcasecmp(name, "Content-Type") == 0 ||
+        strcasecmp(name, "Accept") == 0) {
+        return false;
+    }
+    for (size_t index = 0; name[index] != '\0'; ++index) {
+        unsigned char value = (unsigned char)name[index];
+
+        if (!((value >= 'A' && value <= 'Z') ||
+              (value >= 'a' && value <= 'z') ||
+              (value >= '0' && value <= '9') || value == '-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool headers_valid(const struct telos_transport_request *request)
+{
+    if (request->header_count > CURL_TRANSPORT_MAXIMUM_HEADERS ||
+        (request->header_count > 0 && request->headers == NULL)) {
+        return false;
+    }
+    for (size_t index = 0; index < request->header_count; ++index) {
+        const struct telos_transport_header *header =
+            &request->headers[index];
+        size_t name_size;
+        size_t value_size;
+
+        if (!header_name_valid(header->name) || header->value == NULL ||
+            strpbrk(header->value, "\r\n") != NULL) {
+            return false;
+        }
+        name_size = strlen(header->name);
+        value_size = strlen(header->value);
+        if (name_size > CURL_TRANSPORT_HEADER_SIZE - 3 ||
+            value_size > CURL_TRANSPORT_HEADER_SIZE - name_size - 3) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool append_header(struct curl_slist **headers, const char *header,
+                          struct telos_error **error)
+{
+    struct curl_slist *next = curl_slist_append(*headers, header);
+
+    if (next == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "curl header allocation failed");
+        return false;
+    }
+    *headers = next;
+    return true;
 }
 
 static size_t receive_data(char *data, size_t size, size_t count,
@@ -206,9 +270,10 @@ bool telos_curl_transport_send(const telos_transport_request *request,
         .error = error,
     };
     char content_type[256];
+    char accept[256];
+    char custom_header[CURL_TRANSPORT_HEADER_SIZE];
     char error_buffer[CURL_ERROR_SIZE] = {0};
     struct curl_slist *headers = NULL;
-    struct curl_slist *next_header;
     CURL *curl = NULL;
     CURLcode result;
     long response_code;
@@ -225,8 +290,11 @@ bool telos_curl_transport_send(const telos_transport_request *request,
         request->url == NULL || !url_allowed(request->url) ||
         request->content_type == NULL ||
         strpbrk(request->content_type, "\r\n") != NULL ||
+        (request->accept != NULL &&
+         strpbrk(request->accept, "\r\n") != NULL) ||
         (request->bearer_token != NULL &&
          strpbrk(request->bearer_token, "\r\n") != NULL) ||
+        !headers_valid(request) ||
         request->body == NULL ||
         request->body_size > (size_t)INT64_MAX ||
         timeout_milliseconds <= 0) {
@@ -258,20 +326,33 @@ bool telos_curl_transport_send(const telos_transport_request *request,
                   "curl Content-Type is too long");
         goto cleanup;
     }
-    next_header = curl_slist_append(headers, content_type);
-    if (next_header == NULL) {
-        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
-                  "curl header allocation failed");
+    if (!append_header(&headers, content_type, error)) {
         goto cleanup;
     }
-    headers = next_header;
-    next_header = curl_slist_append(headers, "Accept: text/event-stream");
-    if (next_header == NULL) {
-        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
-                  "curl header allocation failed");
+    if (snprintf(accept, sizeof(accept), "Accept: %s",
+                 request->accept == NULL ? "text/event-stream"
+                                         : request->accept) >=
+        (int)sizeof(accept)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "curl Accept is too long");
         goto cleanup;
     }
-    headers = next_header;
+    if (!append_header(&headers, accept, error)) {
+        goto cleanup;
+    }
+    for (size_t index = 0; index < request->header_count; ++index) {
+        if (snprintf(custom_header, sizeof(custom_header), "%s: %s",
+                     request->headers[index].name,
+                     request->headers[index].value) >=
+            (int)sizeof(custom_header)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                      "curl custom header is too long");
+            goto cleanup;
+        }
+        if (!append_header(&headers, custom_header, error)) {
+            goto cleanup;
+        }
+    }
     result = configure_curl(curl, request, headers, &receiver,
                             timeout_milliseconds, error_buffer);
     if (result == CURLE_OK) {

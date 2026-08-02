@@ -25,6 +25,8 @@ struct telos_openai_responses_config {
     struct telos_secret_broker *secret_broker;
     const char *const *capabilities;
     size_t capability_count;
+    const struct telos_transport_header *headers;
+    size_t header_count;
     telos_transport_send_fn send;
     void *transport_context;
     telos_openai_event_policy unknown_event_policy;

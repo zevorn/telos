@@ -8,6 +8,8 @@
 #include <telos/plugins/openai_responses.h>
 
 #define TELOS_OPENAI_SSE_MAX_SIZE (1024U * 1024U)
+#define TELOS_OPENAI_MAXIMUM_HEADERS 16U
+#define TELOS_OPENAI_HEADER_SIZE 4096U
 
 struct tool_call {
     char *item_id;
@@ -34,6 +36,8 @@ struct telos_openai_responses_provider {
     struct telos_secret_broker *secret_broker;
     char **capabilities;
     size_t capability_count;
+    struct telos_transport_header *headers;
+    size_t header_count;
     telos_transport_send_fn send;
     void *transport_context;
     enum telos_openai_unknown_event_policy unknown_event_policy;
@@ -720,6 +724,15 @@ static void clear_capabilities(struct telos_openai_responses_provider *provider)
     free(provider->capabilities);
 }
 
+static void clear_headers(struct telos_openai_responses_provider *provider)
+{
+    for (size_t index = 0; index < provider->header_count; ++index) {
+        free((char *)provider->headers[index].value);
+        free((char *)provider->headers[index].name);
+    }
+    free(provider->headers);
+}
+
 static bool has_capability(const struct telos_openai_responses_config *config,
                            const char *required)
 {
@@ -747,6 +760,12 @@ telos_openai_provider_create(const telos_openai_config *config,
                   "Responses Provider capability size overflow");
         return NULL;
     }
+    if (config != NULL &&
+        config->header_count > TELOS_OPENAI_MAXIMUM_HEADERS) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Responses Provider header count is invalid");
+        return NULL;
+    }
     if (config != NULL && config->capabilities != NULL) {
         for (size_t index = 0; index < config->capability_count; ++index) {
             if (config->capabilities[index] == NULL ||
@@ -757,11 +776,36 @@ telos_openai_provider_create(const telos_openai_config *config,
             }
         }
     }
+    if (config != NULL && config->headers != NULL) {
+        for (size_t index = 0; index < config->header_count; ++index) {
+            size_t name_size;
+            size_t value_size;
+
+            if (config->headers[index].name == NULL ||
+                config->headers[index].name[0] == '\0' ||
+                config->headers[index].value == NULL ||
+                strpbrk(config->headers[index].name, "\r\n") != NULL ||
+                strpbrk(config->headers[index].value, "\r\n") != NULL) {
+                set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                          "Responses Provider header is invalid");
+                return NULL;
+            }
+            name_size = strlen(config->headers[index].name);
+            value_size = strlen(config->headers[index].value);
+            if (name_size > TELOS_OPENAI_HEADER_SIZE - 3 ||
+                value_size > TELOS_OPENAI_HEADER_SIZE - name_size - 3) {
+                set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                          "Responses Provider header is too long");
+                return NULL;
+            }
+        }
+    }
     if (config == NULL || config->model == NULL || config->model[0] == '\0' ||
         config->endpoint == NULL || config->endpoint[0] == '\0' ||
         config->secret_reference == NULL || config->secret_broker == NULL ||
         config->send == NULL ||
         (config->capability_count > 0 && config->capabilities == NULL) ||
+        (config->header_count > 0 && config->headers == NULL) ||
         !has_capability(config, "network.https") ||
         (config->unknown_event_policy != TELOS_OPENAI_UNKNOWN_EVENT_IGNORE &&
          config->unknown_event_policy != TELOS_OPENAI_UNKNOWN_EVENT_ERROR)) {
@@ -810,6 +854,30 @@ telos_openai_provider_create(const telos_openai_config *config,
             provider->capability_count = index + 1;
         }
     }
+    if (config->header_count > 0) {
+        provider->headers =
+            calloc(config->header_count, sizeof(*provider->headers));
+        if (provider->headers == NULL) {
+            telos_openai_provider_destroy(provider);
+            set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                      "Responses Provider header allocation failed");
+            return NULL;
+        }
+        for (size_t index = 0; index < config->header_count; ++index) {
+            provider->headers[index].name =
+                copy_string(config->headers[index].name);
+            provider->headers[index].value =
+                copy_string(config->headers[index].value);
+            provider->header_count = index + 1;
+            if (provider->headers[index].name == NULL ||
+                provider->headers[index].value == NULL) {
+                telos_openai_provider_destroy(provider);
+                set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                          "Responses Provider header copy failed");
+                return NULL;
+            }
+        }
+    }
     provider->secret_broker = config->secret_broker;
     provider->send = config->send;
     provider->transport_context = config->transport_context;
@@ -822,6 +890,7 @@ void telos_openai_provider_destroy(telos_openai_provider *provider)
     if (provider == NULL) {
         return;
     }
+    clear_headers(provider);
     clear_capabilities(provider);
     telos_secret_reference_destroy(provider->secret_reference);
     free(provider->endpoint);
@@ -904,7 +973,10 @@ telos_openai_provider_dispatch(const telos_provider_request *request,
             .method = "POST",
             .url = url,
             .content_type = "application/json",
+            .accept = "text/event-stream",
             .bearer_token = telos_secret_material_data(secret),
+            .headers = provider->headers,
+            .header_count = provider->header_count,
             .body = body,
             .body_size = body_size - 1,
             .cancel = request->cancel,

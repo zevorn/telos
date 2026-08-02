@@ -49,7 +49,13 @@ static bool send_fixture(const struct telos_transport_request *request,
     assert(strcmp(request->method, "POST") == 0);
     assert(strcmp(request->url, "https://fixture.invalid/v1/responses") == 0);
     assert(strcmp(request->content_type, "application/json") == 0);
+    assert(strcmp(request->accept, "text/event-stream") == 0);
     assert(strcmp(request->bearer_token, "fixture-secret") == 0);
+    assert(request->header_count == 2);
+    assert(strcmp(request->headers[0].name, "chatgpt-account-id") == 0);
+    assert(strcmp(request->headers[0].value, "account-fixture") == 0);
+    assert(strcmp(request->headers[1].name, "originator") == 0);
+    assert(strcmp(request->headers[1].value, "telos") == 0);
     assert(strstr(request->body, "fixture-secret") == NULL);
     fixture->saw_secret = true;
     while ((received = fread(chunk, 1, sizeof(chunk), stream)) > 0) {
@@ -83,6 +89,17 @@ int main(int argc, char **argv)
         "secret.use:provider.openai",
     };
     struct fixture fixture;
+    char account_header[] = "account-fixture";
+    const struct telos_transport_header headers[] = {
+        {
+            .name = "chatgpt-account-id",
+            .value = account_header,
+        },
+        {
+            .name = "originator",
+            .value = "telos",
+        },
+    };
     struct telos_secret_broker *broker;
     struct telos_openai_responses_config config;
     struct telos_openai_responses_provider *provider;
@@ -108,12 +125,15 @@ int main(int argc, char **argv)
         .secret_broker = broker,
         .capabilities = capabilities,
         .capability_count = 2,
+        .headers = headers,
+        .header_count = 2,
         .send = send_fixture,
         .transport_context = &fixture,
         .unknown_event_policy = TELOS_OPENAI_UNKNOWN_EVENT_ERROR,
     };
     provider = telos_openai_provider_create(&config, &error);
     assert(provider != NULL);
+    account_header[0] = 'x';
     assert(telos_openai_provider_dispatch(&request, capture, &fixture, provider,
                                           &error));
     assert(error == NULL);

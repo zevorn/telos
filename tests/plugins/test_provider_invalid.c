@@ -120,6 +120,7 @@ static bool dispatch_rejected(struct telos_openai_responses_provider *provider,
 
 int main(void)
 {
+    char oversized_header_value[4094];
     const char *capabilities[] = {
         "network.https",
         "secret.use:provider.openai",
@@ -128,6 +129,40 @@ int main(void)
     const char *missing_network[] = {"secret.use:provider.openai"};
     const char *null_capability[] = {"network.https", NULL};
     const char *empty_capability[] = {"network.https", ""};
+    const struct telos_transport_header valid_header[] = {
+        {
+            .name = "originator",
+            .value = "telos",
+        },
+    };
+    const struct telos_transport_header null_header_name[] = {
+        {
+            .value = "telos",
+        },
+    };
+    const struct telos_transport_header empty_header_name[] = {
+        {
+            .name = "",
+            .value = "telos",
+        },
+    };
+    const struct telos_transport_header null_header_value[] = {
+        {
+            .name = "originator",
+        },
+    };
+    const struct telos_transport_header injected_header[] = {
+        {
+            .name = "originator",
+            .value = "telos\r\ninjected: value",
+        },
+    };
+    const struct telos_transport_header oversized_header[] = {
+        {
+            .name = "originator",
+            .value = oversized_header_value,
+        },
+    };
     struct context context = {
         .mode = SEND_STATUS,
         .status = 200,
@@ -200,6 +235,40 @@ int main(void)
     invalid = config;
     invalid.capabilities = empty_capability;
     invalid.capability_count = SIZE_MAX;
+    passed = passed && create_rejected(invalid);
+    invalid = config;
+    invalid.headers = NULL;
+    invalid.header_count = 1;
+    passed = passed && create_rejected(invalid);
+    invalid = config;
+    invalid.headers = valid_header;
+    invalid.header_count = SIZE_MAX;
+    passed = passed && create_rejected(invalid);
+    invalid = config;
+    invalid.headers = valid_header;
+    invalid.header_count = 17;
+    passed = passed && create_rejected(invalid);
+    invalid = config;
+    invalid.headers = null_header_name;
+    invalid.header_count = 1;
+    passed = passed && create_rejected(invalid);
+    invalid = config;
+    invalid.headers = empty_header_name;
+    invalid.header_count = 1;
+    passed = passed && create_rejected(invalid);
+    invalid = config;
+    invalid.headers = null_header_value;
+    invalid.header_count = 1;
+    passed = passed && create_rejected(invalid);
+    invalid = config;
+    invalid.headers = injected_header;
+    invalid.header_count = 1;
+    passed = passed && create_rejected(invalid);
+    memset(oversized_header_value, 'a', sizeof(oversized_header_value));
+    oversized_header_value[sizeof(oversized_header_value) - 1] = '\0';
+    invalid = config;
+    invalid.headers = oversized_header;
+    invalid.header_count = 1;
     passed = passed && create_rejected(invalid);
     invalid = config;
     invalid.unknown_event_policy = 0;

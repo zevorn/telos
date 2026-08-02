@@ -6,11 +6,19 @@
 #include <telos/cancel.h>
 #include <telos/error.h>
 
+struct telos_transport_header {
+    const char *name;
+    const char *value;
+};
+
 struct telos_transport_request {
     const char *method;
     const char *url;
     const char *content_type;
+    const char *accept;
     const char *bearer_token;
+    const struct telos_transport_header *headers;
+    size_t header_count;
     const char *body;
     size_t body_size;
     const struct telos_cancel *cancel;

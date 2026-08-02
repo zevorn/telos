@@ -168,6 +168,24 @@ static void expect_error(const struct telos_transport_request *request,
 int main(void)
 {
     static const char body[] = "{}";
+    char oversized_accept[256];
+    char oversized_header_value[4094];
+    struct telos_transport_header valid_header = {
+        .name = "originator",
+        .value = "telos",
+    };
+    const struct telos_transport_header invalid_header_name = {
+        .name = "bad:name",
+        .value = "value",
+    };
+    const struct telos_transport_header protected_header = {
+        .name = "Authorization",
+        .value = "value",
+    };
+    const struct telos_transport_header injected_header = {
+        .name = "originator",
+        .value = "telos\ninjected",
+    };
     struct telos_cancel *cancel = telos_cancel_create();
     struct telos_transport_request request = {
         .method = "GET",
@@ -223,10 +241,44 @@ int main(void)
                  TELOS_ERROR_DOMAIN_ARGUMENT);
 
     request.content_type = "application/json";
+    request.accept = "application/json\r\nInjected: value";
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    memset(oversized_accept, 'a', sizeof(oversized_accept));
+    oversized_accept[sizeof(oversized_accept) - 1] = '\0';
+    request.accept = oversized_accept;
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    request.accept = NULL;
     request.bearer_token = "bad\ntoken";
     expect_error(&request, receive_chunk, &status, NULL,
                  TELOS_ERROR_DOMAIN_ARGUMENT);
     request.bearer_token = NULL;
+    request.header_count = 1;
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    request.headers = &valid_header;
+    request.header_count = 17;
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    request.headers = &invalid_header_name;
+    request.header_count = 1;
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    request.headers = &protected_header;
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    request.headers = &injected_header;
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    memset(oversized_header_value, 'a', sizeof(oversized_header_value));
+    oversized_header_value[sizeof(oversized_header_value) - 1] = '\0';
+    valid_header.value = oversized_header_value;
+    request.headers = &valid_header;
+    expect_error(&request, receive_chunk, &status, NULL,
+                 TELOS_ERROR_DOMAIN_ARGUMENT);
+    request.headers = NULL;
+    request.header_count = 0;
     request.body = NULL;
     expect_error(&request, receive_chunk, &status, NULL,
                  TELOS_ERROR_DOMAIN_ARGUMENT);
