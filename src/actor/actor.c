@@ -24,6 +24,9 @@ struct telos_session_actor {
     telos_session_observer_fn observer;
     void *observer_context;
     struct telos_error *failure;
+    struct telos_reactor *reactor;
+    telos_reactor_handle reactor_handle;
+    bool reactor_scheduled;
 };
 
 static void set_error(struct telos_error **error,
@@ -41,10 +44,94 @@ static void remember_failure(struct telos_session_actor *actor,
                              const struct telos_error *error)
 {
     pthread_mutex_lock(&actor->mutex);
-    if (actor->failure == NULL) {
+    if (actor->failure == NULL && error != NULL) {
         actor->failure = telos_error_retain(error);
     }
     pthread_mutex_unlock(&actor->mutex);
+}
+
+static bool process_event(struct telos_session_actor *actor,
+                          struct actor_event *queued,
+                          struct telos_error **error)
+{
+    enum telos_session_state state;
+    bool applied;
+
+    pthread_mutex_lock(&actor->mutex);
+    applied = telos_session_machine_apply(actor->machine, queued->event,
+                                          error);
+    state = telos_session_machine_state(actor->machine);
+    pthread_mutex_unlock(&actor->mutex);
+    if (applied && actor->store != NULL &&
+        !telos_event_store_append(actor->store, queued->event, error)) {
+        applied = false;
+    }
+    if (applied && actor->observer != NULL) {
+        actor->observer(queued->event, state, actor->observer_context);
+    } else if (!applied) {
+        remember_failure(actor, *error);
+    }
+    return applied;
+}
+
+static bool reactor_actor_task(void *context,
+                               const struct telos_cancel *cancel,
+                               struct telos_error **error)
+{
+    struct telos_session_actor *actor = context;
+    struct actor_event *queued;
+    struct telos_error *event_error = NULL;
+    bool applied;
+
+    (void)cancel;
+    pthread_mutex_lock(&actor->mutex);
+    actor->reactor_scheduled = false;
+    if (actor->stopping || actor->head == NULL) {
+        pthread_mutex_unlock(&actor->mutex);
+        return true;
+    }
+    queued = actor->head;
+    actor->head = queued->next;
+    if (actor->head == NULL) {
+        actor->tail = NULL;
+    }
+    actor->active = true;
+    pthread_mutex_unlock(&actor->mutex);
+
+    applied = process_event(actor, queued, &event_error);
+    if (!applied) {
+        if (error != NULL) {
+            *error = event_error;
+            event_error = NULL;
+        } else {
+            telos_error_release(event_error);
+        }
+    }
+    telos_event_release(queued->event);
+    free(queued);
+
+    pthread_mutex_lock(&actor->mutex);
+    actor->active = false;
+    if (applied && actor->head != NULL && !actor->stopping &&
+        !actor->reactor_scheduled) {
+        actor->reactor_scheduled = telos_reactor_post(
+            actor->reactor, reactor_actor_task, actor, &actor->reactor_handle,
+            error);
+        if (!actor->reactor_scheduled) {
+            actor->failure = error == NULL || *error == NULL
+                                 ? telos_error_create(
+                                       TELOS_ERROR_DOMAIN_STATE, EIO,
+                                       "Reactor could not reschedule Session "
+                                       "Actor work",
+                                       NULL)
+                                 : telos_error_retain(*error);
+            applied = false;
+        }
+    }
+    pthread_cond_broadcast(&actor->idle);
+    pthread_mutex_unlock(&actor->mutex);
+    telos_error_release(event_error);
+    return applied;
 }
 
 static void *actor_worker(void *context)
@@ -54,8 +141,6 @@ static void *actor_worker(void *context)
     for (;;) {
         struct actor_event *queued;
         struct telos_error *error = NULL;
-        bool applied;
-        enum telos_session_state state;
 
         pthread_mutex_lock(&actor->mutex);
         while (actor->head == NULL && !actor->stopping) {
@@ -74,20 +159,7 @@ static void *actor_worker(void *context)
         actor->active = true;
         pthread_mutex_unlock(&actor->mutex);
 
-        pthread_mutex_lock(&actor->mutex);
-        applied =
-            telos_session_machine_apply(actor->machine, queued->event, &error);
-        state = telos_session_machine_state(actor->machine);
-        pthread_mutex_unlock(&actor->mutex);
-        if (applied && actor->store != NULL &&
-            !telos_event_store_append(actor->store, queued->event, &error)) {
-            applied = false;
-        }
-        if (applied && actor->observer != NULL) {
-            actor->observer(queued->event, state, actor->observer_context);
-        } else if (!applied) {
-            remember_failure(actor, error);
-        }
+        process_event(actor, queued, &error);
 
         telos_error_release(error);
         telos_event_release(queued->event);
@@ -157,6 +229,10 @@ telos_session_actor_create(const struct telos_session_actor_spec *spec,
         actor->store = spec->store;
         actor->observer = spec->observer;
         actor->observer_context = spec->observer_context;
+        actor->reactor = spec->reactor;
+    }
+    if (actor->reactor != NULL) {
+        return actor;
     }
 
     result = pthread_create(&actor->thread, NULL, actor_worker, actor);
@@ -187,6 +263,11 @@ void telos_session_actor_destroy(struct telos_session_actor *actor)
     pthread_mutex_unlock(&actor->mutex);
     if (actor->thread_started) {
         pthread_join(actor->thread, NULL);
+    }
+
+    if (actor->reactor != NULL && actor->reactor_scheduled) {
+        telos_reactor_cancel(actor->reactor, actor->reactor_handle, NULL);
+        actor->reactor_scheduled = false;
     }
 
     queued = actor->head;
@@ -246,6 +327,30 @@ bool telos_session_actor_submit(struct telos_session_actor *actor,
         actor->tail->next = queued;
     }
     actor->tail = queued;
+    if (actor->reactor != NULL && !actor->reactor_scheduled) {
+        actor->reactor_scheduled = telos_reactor_post(
+            actor->reactor, reactor_actor_task, actor, &actor->reactor_handle,
+            error);
+        if (!actor->reactor_scheduled) {
+            if (actor->head == queued) {
+                actor->head = NULL;
+                actor->tail = NULL;
+            } else {
+                struct actor_event *cursor = actor->head;
+
+                while (cursor->next != queued) {
+                    cursor = cursor->next;
+                }
+                cursor->next = NULL;
+                actor->tail = cursor;
+            }
+            actor->failure = telos_error_retain(*error);
+            pthread_mutex_unlock(&actor->mutex);
+            telos_event_release(queued->event);
+            free(queued);
+            return false;
+        }
+    }
     pthread_cond_signal(&actor->wake);
     pthread_mutex_unlock(&actor->mutex);
     return true;
@@ -261,6 +366,36 @@ bool telos_session_actor_wait_idle(struct telos_session_actor *actor,
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
                   "Session Actor is required", NULL);
         return false;
+    }
+
+    if (actor->reactor != NULL) {
+        for (;;) {
+            bool executed;
+
+            pthread_mutex_lock(&actor->mutex);
+            if (actor->failure != NULL) {
+                set_error(error, TELOS_ERROR_DOMAIN_STATE, EIO,
+                          "Session Actor event processing failed",
+                          actor->failure);
+                pthread_mutex_unlock(&actor->mutex);
+                return false;
+            }
+            if (actor->head == NULL && !actor->active) {
+                pthread_mutex_unlock(&actor->mutex);
+                return true;
+            }
+            pthread_mutex_unlock(&actor->mutex);
+            if (!telos_reactor_run_once(actor->reactor, NULL, &executed,
+                                        error)) {
+                return false;
+            }
+            if (!executed) {
+                set_error(error, TELOS_ERROR_DOMAIN_STATE, EBUSY,
+                          "Session Actor has no runnable Reactor task",
+                          NULL);
+                return false;
+            }
+        }
     }
 
     pthread_mutex_lock(&actor->mutex);

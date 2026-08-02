@@ -26,6 +26,11 @@ unit_tests = [
         'test_session_tool_join.c',
     ],
     ['session-actor', 'test-session-actor', 'test_session_actor.c'],
+    [
+        'session-reactor',
+        'test-session-reactor',
+        'test_session_reactor.c',
+    ],
     ['actor-invalid', 'test-actor-invalid', 'test_actor_invalid.c'],
     ['session-retry', 'test-session-retry', 'test_session_retry.c'],
     [

@@ -4,6 +4,7 @@
 #include <telos/types.h>
 
 #include <telos/session.h>
+#include <telos/reactor.h>
 #include <telos/store.h>
 
 struct telos_session_actor;
@@ -16,6 +17,7 @@ struct telos_session_actor_spec {
     struct telos_event_store *store;
     telos_session_observer_fn observer;
     void *observer_context;
+    struct telos_reactor *reactor;
 };
 
 struct telos_session_actor *

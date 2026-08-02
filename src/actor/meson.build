@@ -3,6 +3,7 @@ telos_actor = static_library(
     'actor.c',
     dependencies: [
         telos_state_dep,
+        telos_reactor_dep,
         telos_store_dep,
         thread_dep,
     ],
@@ -12,6 +13,7 @@ telos_actor = static_library(
 telos_actor_dep = declare_dependency(
     dependencies: [
         telos_state_dep,
+        telos_reactor_dep,
         telos_store_dep,
         thread_dep,
     ],
