@@ -203,6 +203,14 @@ anthropic_plugin_tests = [
      'test_anthropic_transport.c'],
 ]
 
+test_posix_tools = executable(
+    'test-posix-tools',
+    'test_posix_tools.c',
+    dependencies: telos_posix_tools_plugin_dep,
+)
+
+test('posix-tools', test_posix_tools, suite: 'plugins')
+
 foreach entry : openai_plugin_tests
     plugin_test = executable(
         entry[1],
@@ -489,6 +497,13 @@ if get_option('shared_plugins')
     official_plugin_source_paths += [
         meson.project_source_root() / 'plugins/authentication/api-key',
     ]
+    if posix_host_plugins_available
+        official_plugin_modules += [telos_posix_tools_module]
+        official_plugin_module_paths += [telos_posix_tools_module.full_path()]
+        official_plugin_source_paths += [
+            meson.project_source_root() / 'plugins/tools/posix',
+        ]
+    endif
 
     test_official_plugins = executable(
         'test-official-plugins',

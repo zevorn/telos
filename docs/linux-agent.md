@@ -107,6 +107,12 @@ The Project Guidance Plugin loads `~/.telos/AGENTS.md` and each applicable
 project `AGENTS.md` into the immutable prompt snapshot. Secrets are resolved
 later at the trusted Provider boundary and never enter that snapshot.
 
+The POSIX Tools Plugin exposes the four local tools used by the Agent: `read`,
+`write`, `edit`, and `bash`. File paths stay below the current working
+directory, file contents are bounded, and shell output is capped. Set
+`TELOS_AGENT_DISABLE_BASH=1` when a session must not spawn a shell; set
+`TELOS_AGENT_SHELL` to select a compatible shell executable.
+
 ## Terminal controls
 
 | Key | Action |

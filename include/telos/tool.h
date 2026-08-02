@@ -20,6 +20,7 @@ enum telos_policy_decision {
 
 struct telos_tool_context {
     const struct telos_cancel *cancel;
+    void *context;
 };
 
 typedef bool (*telos_tool_execute_fn)(const struct telos_tool_context *context,
@@ -33,6 +34,12 @@ struct telos_tool_definition {
     const char *const *required_capabilities;
     size_t required_capability_count;
     telos_tool_execute_fn execute;
+    void *context;
+};
+
+struct telos_tool_plugin_definition_v1 {
+    uint32_t struct_size;
+    const char *id;
 };
 
 struct telos_policy_request {

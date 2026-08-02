@@ -216,7 +216,10 @@ bool telos_tool_execute(const struct telos_registry_generation *generation,
     const struct telos_tool_definition *tool;
     struct telos_policy_request policy_request;
     enum telos_policy_decision decision;
-    struct telos_tool_context context = {.cancel = cancel};
+    struct telos_tool_context context = {
+        .cancel = cancel,
+        .context = NULL,
+    };
 
     if (error != NULL) {
         *error = NULL;
@@ -256,6 +259,7 @@ bool telos_tool_execute(const struct telos_registry_generation *generation,
                   "Tool arguments do not match the input schema");
         return false;
     }
+    context.context = tool->context;
     for (size_t index = 0; index < tool->required_capability_count; ++index) {
         if (tool->required_capabilities == NULL ||
             tool->required_capabilities[index] == NULL ||

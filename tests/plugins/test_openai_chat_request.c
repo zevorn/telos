@@ -13,7 +13,12 @@ int main(void)
         telos_value_new_object(message_keys, message_values, 2);
     const struct telos_value *item_values[] = {message};
     struct telos_value *items = telos_value_new_array(item_values, 1);
-    struct telos_value *tools = telos_value_new_array(NULL, 0);
+    struct telos_value *tools = telos_value_parse_json(
+        "[{\"name\":\"read\",\"description\":\"read\","
+        "\"parameters\":{\"type\":\"object\"}}]",
+        sizeof("[{\"name\":\"read\",\"description\":\"read\","
+               "\"parameters\":{\"type\":\"object\"}}]") - 1,
+        NULL);
     struct telos_value *temperature = telos_value_new_real(0.25);
     const char *option_keys[] = {"temperature"};
     const struct telos_value *option_values[] = {temperature};
@@ -43,9 +48,17 @@ int main(void)
                   user == message &&
                   telos_value_boolean(telos_value_get(body, "stream"),
                                       &stream) &&
-                  stream && telos_value_real(telos_value_get(body, "temperature"),
-                                             &mapped_temperature) &&
+                  stream &&
+                  telos_value_real(telos_value_get(body, "temperature"),
+                                   &mapped_temperature) &&
                   mapped_temperature == 0.25 &&
+                  strcmp(telos_value_string(telos_value_get(
+                             telos_value_get(
+                                 telos_value_at(telos_value_get(body, "tools"),
+                                                0),
+                                 "function"),
+                             "name")),
+                         "read") == 0 &&
                   telos_value_get(body, "instructions") == NULL &&
                   telos_value_get(body, "input") == NULL;
 

@@ -12,6 +12,7 @@ Telos v0.1 provides:
 - OpenAI-compatible Agent Skills and deterministic prompt composition
 - Provider-neutral Items and an OpenAI Responses Provider Plugin
 - a Pi-style POSIX terminal Frontend and cancellable curl Transport Plugins
+- bounded POSIX `read`, `write`, `edit`, and `bash` Tool Plugins
 - Policy-controlled Tools, Capability and Secret Brokers, and an Agent loop
 - source-first Plugin inspection, build, test, cache, activation, and rollback
 - a public Meson Plugin SDK and host CLI

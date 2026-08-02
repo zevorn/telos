@@ -52,6 +52,86 @@ static void set_error(struct telos_error **error,
     }
 }
 
+static struct telos_value *convert_tools(const struct telos_value *tools,
+                                         struct telos_error **error)
+{
+    struct telos_value **converted;
+    struct telos_value *result;
+    size_t count;
+
+    count = telos_value_count(tools);
+    if (count > 0 && count > SIZE_MAX / sizeof(*converted)) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Responses Tool list is too large");
+        return NULL;
+    }
+    converted = calloc(count == 0 ? 1 : count, sizeof(*converted));
+    if (converted == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Responses Tool list allocation failed");
+        return NULL;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        const struct telos_value *tool = telos_value_at(tools, index);
+        const char *name = telos_value_string(telos_value_get(tool, "name"));
+        const char *description =
+            telos_value_string(telos_value_get(tool, "description"));
+        const struct telos_value *parameters =
+            telos_value_get(tool, "parameters");
+        struct telos_value *type = telos_value_new_string("function");
+        struct telos_value *name_value =
+            name == NULL ? NULL : telos_value_new_string(name);
+        struct telos_value *description_value =
+            description == NULL ? NULL : telos_value_new_string(description);
+        struct telos_value *parameters_value =
+            telos_value_retain(parameters);
+        const char *keys[] = {"type", "name", "description", "parameters"};
+        const struct telos_value *values[] = {
+            type,
+            name_value,
+            description_value,
+            parameters_value,
+        };
+
+        if (telos_value_type(tool) != TELOS_VALUE_OBJECT || name == NULL ||
+            description == NULL || parameters == NULL ||
+            telos_value_type(parameters) != TELOS_VALUE_OBJECT ||
+            type == NULL || name_value == NULL || description_value == NULL ||
+            parameters_value == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                      "Responses Tool description is invalid");
+        } else {
+            converted[index] = telos_value_new_object(keys, values, 4);
+            if (converted[index] == NULL) {
+                set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                          "Responses Tool description allocation failed");
+            }
+        }
+        telos_value_release(parameters_value);
+        telos_value_release(description_value);
+        telos_value_release(name_value);
+        telos_value_release(type);
+        if (converted[index] == NULL) {
+            for (size_t prior = 0; prior < index; ++prior) {
+                telos_value_release(converted[prior]);
+            }
+            free(converted);
+            return NULL;
+        }
+    }
+    result = telos_value_new_array(
+        (const struct telos_value *const *)converted, count);
+    for (size_t index = 0; index < count; ++index) {
+        telos_value_release(converted[index]);
+    }
+    free(converted);
+    if (result == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Responses Tool list construction failed");
+    }
+    return result;
+}
+
 struct telos_value *
 telos_openai_responses_build_request(const char *model,
                                      const telos_provider_request *request,
@@ -59,6 +139,7 @@ telos_openai_responses_build_request(const char *model,
 {
     const char **keys = NULL;
     struct telos_value **values = NULL;
+    struct telos_value *converted_tools = NULL;
     size_t option_count;
     size_t count = 0;
     struct telos_value *result = NULL;
@@ -100,7 +181,11 @@ telos_openai_responses_build_request(const char *model,
     keys[count] = "input";
     values[count++] = telos_value_retain(request->items);
     keys[count] = "tools";
-    values[count++] = telos_value_retain(request->tools);
+    converted_tools = convert_tools(request->tools, error);
+    if (converted_tools == NULL) {
+        goto cleanup;
+    }
+    values[count++] = telos_value_retain(converted_tools);
     keys[count] = "store";
     values[count++] = telos_value_new_boolean(request->state_mode ==
                                               TELOS_PROVIDER_STATE_REMOTE);
@@ -149,6 +234,7 @@ cleanup:
     }
     free(values);
     free(keys);
+    telos_value_release(converted_tools);
     return result;
 }
 

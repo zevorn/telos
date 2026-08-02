@@ -56,6 +56,10 @@ struct telos_openai_chat_provider {
     enum telos_openai_chat_unknown_event_policy unknown_event_policy;
 };
 
+typedef enum telos_openai_chat_unknown_event_policy chat_event_policy;
+typedef struct telos_openai_chat_config chat_config;
+typedef struct telos_provider_request provider_request;
+
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
                       int code,
@@ -64,6 +68,97 @@ static void set_error(struct telos_error **error,
     if (error != NULL && *error == NULL) {
         *error = telos_error_create(domain, code, message, NULL);
     }
+}
+
+static struct telos_value *convert_tools(const struct telos_value *tools,
+                                         struct telos_error **error)
+{
+    struct telos_value **converted;
+    struct telos_value *result;
+    size_t count = telos_value_count(tools);
+
+    if (count > 0 && count > SIZE_MAX / sizeof(*converted)) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Chat Tool list is too large");
+        return NULL;
+    }
+    converted = calloc(count == 0 ? 1 : count, sizeof(*converted));
+    if (converted == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Chat Tool list allocation failed");
+        return NULL;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        const struct telos_value *tool = telos_value_at(tools, index);
+        const char *name = telos_value_string(telos_value_get(tool, "name"));
+        const char *description =
+            telos_value_string(telos_value_get(tool, "description"));
+        const struct telos_value *parameters =
+            telos_value_get(tool, "parameters");
+        struct telos_value *type = telos_value_new_string("function");
+        struct telos_value *name_value =
+            name == NULL ? NULL : telos_value_new_string(name);
+        struct telos_value *description_value =
+            description == NULL ? NULL : telos_value_new_string(description);
+        struct telos_value *parameters_value =
+            telos_value_retain(parameters);
+        struct telos_value *function;
+        const char *function_keys[] = {"name", "description", "parameters"};
+        const struct telos_value *function_values[] = {
+            name_value,
+            description_value,
+            parameters_value,
+        };
+        const char *keys[] = {"type", "function"};
+        const struct telos_value *values[] = {type, NULL};
+
+        function = NULL;
+        if (telos_value_type(tool) != TELOS_VALUE_OBJECT || name == NULL ||
+            description == NULL || parameters == NULL ||
+            telos_value_type(parameters) != TELOS_VALUE_OBJECT ||
+            type == NULL || name_value == NULL || description_value == NULL ||
+            parameters_value == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                      "Chat Tool description is invalid");
+        } else {
+            function = telos_value_new_object(function_keys, function_values,
+                                              3);
+            values[1] = function;
+            if (function == NULL) {
+                set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                          "Chat Tool function allocation failed");
+            } else {
+                converted[index] = telos_value_new_object(keys, values, 2);
+                if (converted[index] == NULL) {
+                    set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                              "Chat Tool description allocation failed");
+                }
+            }
+        }
+        telos_value_release(function);
+        telos_value_release(parameters_value);
+        telos_value_release(description_value);
+        telos_value_release(name_value);
+        telos_value_release(type);
+        if (converted[index] == NULL) {
+            for (size_t prior = 0; prior < index; ++prior) {
+                telos_value_release(converted[prior]);
+            }
+            free(converted);
+            return NULL;
+        }
+    }
+    result = telos_value_new_array(
+        (const struct telos_value *const *)converted, count);
+    for (size_t index = 0; index < count; ++index) {
+        telos_value_release(converted[index]);
+    }
+    free(converted);
+    if (result == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Chat Tool list construction failed");
+    }
+    return result;
 }
 
 static char *copy_string(const char *value)
@@ -110,9 +205,8 @@ static struct telos_value *new_message(const char *role,
     return message;
 }
 
-static struct telos_value *convert_function_call(
-    const struct telos_value *item,
-    struct telos_error **error)
+static struct telos_value *convert_function_call(const struct telos_value *item,
+                                                 struct telos_error **error)
 {
     const char *call_id = string_field(item, "call_id");
     const char *name = string_field(item, "name");
@@ -177,9 +271,9 @@ cleanup:
     return message;
 }
 
-static struct telos_value *convert_function_output(
-    const struct telos_value *item,
-    struct telos_error **error)
+static struct telos_value *
+convert_function_output(const struct telos_value *item,
+                        struct telos_error **error)
 {
     const char *call_id = string_field(item, "call_id");
     const char *output = string_field(item, "output");
@@ -234,10 +328,10 @@ static struct telos_value *convert_item(const struct telos_value *item,
     return NULL;
 }
 
-struct telos_value *telos_openai_chat_build_request(
-    const char *model,
-    const struct telos_provider_request *request,
-    struct telos_error **error)
+struct telos_value *
+telos_openai_chat_build_request(const char *model,
+                                const struct telos_provider_request *request,
+                                struct telos_error **error)
 {
     const size_t fixed_fields = 4;
     const char **keys = NULL;
@@ -245,6 +339,7 @@ struct telos_value *telos_openai_chat_build_request(
     struct telos_value **messages = NULL;
     struct telos_value *system = NULL;
     struct telos_value *message_array = NULL;
+    struct telos_value *converted_tools = NULL;
     struct telos_value *result = NULL;
     size_t item_count;
     size_t option_count;
@@ -310,7 +405,11 @@ struct telos_value *telos_openai_chat_build_request(
     keys[count] = "messages";
     values[count++] = telos_value_retain(message_array);
     keys[count] = "tools";
-    values[count++] = telos_value_retain(request->tools);
+    converted_tools = convert_tools(request->tools, error);
+    if (converted_tools == NULL) {
+        goto cleanup;
+    }
+    values[count++] = telos_value_retain(converted_tools);
     keys[count] = "stream";
     values[count++] = telos_value_new_boolean(true);
     for (size_t index = 0; index < option_count; ++index) {
@@ -352,6 +451,7 @@ cleanup:
     free(messages);
     free(values);
     free(keys);
+    telos_value_release(converted_tools);
     return result;
 }
 
@@ -454,9 +554,8 @@ static bool emit_event(struct telos_openai_chat_sse_parser *parser,
     return true;
 }
 
-static struct chat_tool_call *find_tool_call(
-    struct telos_openai_chat_sse_parser *parser,
-    size_t index)
+static struct chat_tool_call *
+find_tool_call(struct telos_openai_chat_sse_parser *parser, size_t index)
 {
     for (size_t offset = 0; offset < parser->tool_call_count; ++offset) {
         if (parser->tool_calls[offset].index == index) {
@@ -466,10 +565,9 @@ static struct chat_tool_call *find_tool_call(
     return NULL;
 }
 
-static struct chat_tool_call *get_tool_call(
-    struct telos_openai_chat_sse_parser *parser,
-    size_t index,
-    struct telos_error **error)
+static struct chat_tool_call *
+get_tool_call(struct telos_openai_chat_sse_parser *parser, size_t index,
+              struct telos_error **error)
 {
     struct chat_tool_call *call = find_tool_call(parser, index);
 
@@ -918,11 +1016,11 @@ static bool next_frame(const char *buffer,
     return false;
 }
 
-telos_openai_chat_sse_parser *telos_openai_chat_sse_parser_create(
-    enum telos_openai_chat_unknown_event_policy unknown_policy,
-    telos_provider_event_fn callback,
-    void *callback_context,
-    struct telos_error **error)
+telos_openai_chat_sse_parser *
+telos_openai_chat_sse_parser_create(chat_event_policy unknown_policy,
+                                    telos_provider_event_fn callback,
+                                    void *callback_context,
+                                    struct telos_error **error)
 {
     struct telos_openai_chat_sse_parser *parser;
 
@@ -1083,9 +1181,9 @@ static void clear_headers(telos_openai_chat_provider *provider)
     free(provider->headers);
 }
 
-telos_openai_chat_provider *telos_openai_chat_provider_create(
-    const struct telos_openai_chat_config *config,
-    struct telos_error **error)
+telos_openai_chat_provider *
+telos_openai_chat_provider_create(const chat_config *config,
+                                  struct telos_error **error)
 {
     telos_openai_chat_provider *provider;
 
@@ -1283,12 +1381,12 @@ static char *endpoint_url(const char *endpoint, struct telos_error **error)
     return url;
 }
 
-bool telos_openai_chat_provider_dispatch(
-    const struct telos_provider_request *request,
-    telos_provider_event_fn emit,
-    void *emit_context,
-    void *provider_context,
-    struct telos_error **error)
+bool
+telos_openai_chat_provider_dispatch(const provider_request *request,
+                                    telos_provider_event_fn emit,
+                                    void *emit_context,
+                                    void *provider_context,
+                                    struct telos_error **error)
 {
     telos_openai_chat_provider *provider = provider_context;
     struct telos_value *body_value = NULL;

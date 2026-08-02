@@ -20,6 +20,7 @@
 #include <telos/plugins/openai_chat.h>
 #include <telos/plugins/openai_responses.h>
 #include <telos/plugins/project_guidance.h>
+#include <telos/plugins/posix_tools.h>
 #include <telos/plugins/terminal_frontend.h>
 #include <telos/prompt.h>
 #include <telos/registry.h>
@@ -44,6 +45,7 @@ struct chat_session {
     void (*provider_destroy)(void *provider);
     struct telos_registry *registry;
     struct telos_registry_generation *generation;
+    struct telos_posix_tools *posix_tools;
     struct telos_capability_broker *capability_broker;
     struct telos_prompt_snapshot *prompt;
     struct telos_value *tools;
@@ -631,11 +633,20 @@ static bool create_provider(struct chat_session *chat,
 }
 
 static enum telos_policy_decision
-deny_tools(const struct telos_policy_request *request, void *context)
+allow_tools(const struct telos_policy_request *request, void *context)
 {
-    (void)request;
+    const char *disable_bash = getenv("TELOS_AGENT_DISABLE_BASH");
+
     (void)context;
-    return TELOS_POLICY_DENY;
+
+    if (request == NULL || request->tool_id == NULL) {
+        return TELOS_POLICY_DENY;
+    }
+    if (strcmp(request->tool_id, "bash") == 0 && disable_bash != NULL &&
+        strcmp(disable_bash, "1") == 0) {
+        return TELOS_POLICY_DENY;
+    }
+    return TELOS_POLICY_ALLOW;
 }
 
 static bool marker_exists(const char *directory, const char *name)
@@ -1846,7 +1857,34 @@ static bool initialize_chat(struct chat_session *chat,
     if (chat->model != NULL && !create_provider(chat, error)) {
         return false;
     }
-    chat->registry = telos_registry_create(NULL, 0, error);
+    {
+        static const char *const tool_capabilities[] = {
+            "filesystem.read",
+            "filesystem.write",
+            "process.spawn",
+        };
+        const struct telos_posix_tools_config tools_config = {
+            .working_directory = current_directory,
+            .shell = getenv("TELOS_AGENT_SHELL"),
+        };
+
+        chat->registry = telos_registry_create(tool_capabilities, 3, error);
+        if (chat->registry == NULL) {
+            return false;
+        }
+        chat->posix_tools = telos_posix_tools_create(&tools_config, error);
+        if (chat->posix_tools == NULL ||
+            !telos_posix_tools_register(chat->posix_tools, chat->registry,
+                                        error)) {
+            return false;
+        }
+        chat->capability_broker = telos_capability_broker_create(
+            tool_capabilities, 3, allow_tools, chat, error);
+        if (chat->capability_broker == NULL) {
+            return false;
+        }
+        chat->tools = telos_posix_tools_describe(error);
+    }
     if (chat->registry == NULL) {
         return false;
     }
@@ -1856,12 +1894,6 @@ static bool initialize_chat(struct chat_session *chat,
                   "Agent Registry Snapshot allocation failed");
         return false;
     }
-    chat->capability_broker =
-        telos_capability_broker_create(NULL, 0, deny_tools, NULL, error);
-    if (chat->capability_broker == NULL) {
-        return false;
-    }
-    chat->tools = telos_value_new_array(NULL, 0);
     chat->provider_options = telos_value_new_object(NULL, NULL, 0);
     if (chat->tools == NULL || chat->provider_options == NULL) {
         set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
@@ -1881,6 +1913,7 @@ static void clear_chat(struct chat_session *chat)
     telos_capability_broker_destroy(chat->capability_broker);
     telos_registry_generation_release(chat->generation);
     telos_registry_destroy(chat->registry);
+    telos_posix_tools_destroy(chat->posix_tools);
     if (chat->provider_destroy != NULL) {
         chat->provider_destroy(chat->provider_context);
     }

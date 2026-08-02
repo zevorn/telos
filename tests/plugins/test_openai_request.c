@@ -8,7 +8,12 @@ int main(void)
     struct telos_value *item = telos_value_new_string("hello");
     const struct telos_value *item_values[] = {item};
     struct telos_value *items = telos_value_new_array(item_values, 1);
-    struct telos_value *tools = telos_value_new_array(NULL, 0);
+    struct telos_value *tools = telos_value_parse_json(
+        "[{\"name\":\"read\",\"description\":\"read\","
+        "\"parameters\":{\"type\":\"object\"}}]",
+        sizeof("[{\"name\":\"read\",\"description\":\"read\","
+               "\"parameters\":{\"type\":\"object\"}}]") - 1,
+        NULL);
     struct telos_value *temperature = telos_value_new_real(0.25);
     const char *option_keys[] = {"temperature"};
     const struct telos_value *option_values[] = {temperature};
@@ -46,6 +51,10 @@ int main(void)
                          &mapped_temperature) &&
         mapped_temperature == 0.25 &&
         telos_value_get(local_json, "input") == items &&
+        strcmp(telos_value_string(telos_value_get(
+                   telos_value_at(telos_value_get(local_json, "tools"), 0),
+                   "type")),
+               "function") == 0 &&
         strcmp(telos_value_string(
                    telos_value_get(remote_json, "previous_response_id")),
                "resp_previous") == 0;

@@ -18,6 +18,7 @@
 #include <telos/provider.h>
 #include <telos/resource.h>
 #include <telos/store.h>
+#include <telos/tool.h>
 #include <telos/transport.h>
 
 static void discard_log(void *context, int level, const char *message)
@@ -150,6 +151,7 @@ int main(int argc, char **argv)
         "filesystem.read",
         "filesystem.write",
         "network.https",
+        "process.spawn",
         "secret.use:provider.openai",
         "terminal.interactive",
         "network.http:loopback",
@@ -163,12 +165,12 @@ int main(int argc, char **argv)
         "dev.zevorn.openai-codex-auth",
         "dev.zevorn.terminal-frontend", "dev.zevorn.curl-transport",
         "dev.zevorn.model-catalog", "dev.zevorn.jsonl-store",
-        "dev.zevorn.api-key-auth",
+        "dev.zevorn.api-key-auth", "dev.zevorn.posix-tools",
     };
     size_t plugin_count;
     struct telos_registry *registry;
     struct telos_host_api_v1 host;
-    struct telos_plugin_module *modules[14] = {0};
+    struct telos_plugin_module *modules[15] = {0};
     struct telos_registry_generation *generation;
     struct telos_value *empty = telos_value_new_object(NULL, NULL, 0);
     struct telos_value *capacity = telos_value_new_integer(2);
@@ -203,14 +205,14 @@ int main(int argc, char **argv)
     struct telos_value *jsonl =
         telos_value_new_object(markdown_keys, jsonl_values, 1);
 
-    assert(argc >= 19 && argc <= 29 && argc % 2 == 1);
+    assert(argc >= 19 && argc <= 31 && argc % 2 == 1);
     plugin_count = ((size_t)argc - 1) / 2;
     assert(descriptor >= 0);
     assert(jsonl_descriptor >= 0);
     close(descriptor);
     close(jsonl_descriptor);
     assert(telos_host_api_v1_initialize(&host, NULL, discard_log, NULL));
-    registry = telos_registry_create(capabilities, 6, NULL);
+    registry = telos_registry_create(capabilities, 7, NULL);
     assert(registry != NULL);
     for (size_t index = 0; index < plugin_count; ++index) {
         verify_package(argv[index + plugin_count + 1], plugin_ids[index]);
@@ -227,6 +229,15 @@ int main(int argc, char **argv)
     verify_store(generation, plugin_ids[2], markdown);
     if (plugin_count > 12) {
         verify_store(generation, plugin_ids[12], jsonl);
+    }
+    if (plugin_count > 14) {
+        const struct telos_extension_descriptor *tool = find_extension(
+            generation, TELOS_EXTENSION_TOOL, plugin_ids[14]);
+        const struct telos_tool_plugin_definition_v1 *definition =
+            tool->implementation;
+
+        assert(definition->struct_size >= sizeof(*definition));
+        assert(strcmp(definition->id, plugin_ids[14]) == 0);
     }
     reject_store_configuration(generation, plugin_ids[0], capacity);
     reject_store_configuration(generation, plugin_ids[0], ring);

@@ -103,6 +103,7 @@ The repository currently ships these Plugins:
 | `dev.zevorn.markdown-store` | Store | Persists append-only, human-readable Event records. |
 | `dev.zevorn.agent-skills` | Context Source | Discovers and validates filesystem-backed Agent Skills on POSIX hosts. |
 | `dev.zevorn.project-guidance` | Context Source | Loads ordered user and project guidance on POSIX hosts. |
+| `dev.zevorn.posix-tools` | Tool | Provides bounded `read`, `write`, `edit`, and `bash` tools on POSIX hosts. |
 | `dev.zevorn.terminal-frontend` | Frontend | Provides bounded main-screen terminal interaction on Linux and macOS. |
 | `dev.zevorn.curl-transport` | Transport | Streams cancellable HTTP responses through libcurl on Linux and macOS. |
 

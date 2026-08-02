@@ -9,6 +9,7 @@ posix_host_plugins_available = host_machine.system() == 'linux' or \
 
 if posix_host_plugins_available
     subdir('authentication')
+    subdir('tools')
 endif
 
 terminal_frontend_available = posix_host_plugins_available
@@ -34,6 +35,10 @@ telos_official_plugin_deps = [
     telos_project_guidance_plugin_dep,
     telos_api_key_auth_plugin_dep,
 ]
+
+if posix_host_plugins_available
+    telos_official_plugin_deps += telos_posix_tools_plugin_dep
+endif
 
 if terminal_frontend_available
     telos_official_plugin_deps += telos_terminal_frontend_plugin_dep

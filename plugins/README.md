@@ -10,6 +10,7 @@ released under the same rules as the Plugins maintained by the core team.
 | --- | --- | --- |
 | [OpenAI Codex Authentication](authentication/openai-codex/README.md) | Authentication | Linux and macOS |
 | [Provider API-key Authentication](authentication/api-key/README.md) | Authentication | Linux and macOS |
+| [POSIX Agent Tools](tools/posix/README.md) | Tool | Linux and macOS |
 | [OpenAI Responses](providers/openai-responses/README.md) | Provider | Linux, macOS, and Zephyr |
 | [Memory Store](stores/memory/README.md) | Store | Linux, macOS, and Zephyr |
 | [Ring Store](stores/ring/README.md) | Store | Linux, macOS, and Zephyr |

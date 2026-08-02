@@ -13,7 +13,12 @@ int main(void)
         telos_value_new_object(message_keys, message_values, 2);
     const struct telos_value *item_values[] = {message};
     struct telos_value *items = telos_value_new_array(item_values, 1);
-    struct telos_value *tools = telos_value_new_array(NULL, 0);
+    struct telos_value *tools = telos_value_parse_json(
+        "[{\"name\":\"read\",\"description\":\"read\","
+        "\"parameters\":{\"type\":\"object\"}}]",
+        sizeof("[{\"name\":\"read\",\"description\":\"read\","
+               "\"parameters\":{\"type\":\"object\"}}]") - 1,
+        NULL);
     struct telos_value *options = telos_value_new_object(NULL, NULL, 0);
     const struct telos_provider_request request = {
         .instructions = "be concise",
@@ -33,6 +38,10 @@ int main(void)
                          "be concise") == 0 &&
                   telos_value_count(messages) == 1 &&
                   telos_value_at(messages, 0) == message &&
+                  strcmp(telos_value_string(telos_value_get(
+                             telos_value_at(telos_value_get(body, "tools"), 0),
+                             "name")),
+                         "read") == 0 &&
                   telos_value_integer(telos_value_get(body, "max_tokens"),
                                       &max_tokens) &&
                   max_tokens == 4096 &&
