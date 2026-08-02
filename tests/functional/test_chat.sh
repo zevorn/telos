@@ -85,8 +85,9 @@ printf '[{"role":"user","content":"saved"}]\n' \
         '/hotkeys' \
         '/changelog' \
         '/trust'
-    printf '/export %s\n/share %s\n/quit\n' \
-        "$temporary/export.json" "$temporary/share.json"
+    printf '/export %s\n/resume %s\n/share %s\n/quit\n' \
+        "$temporary/export.json" "$temporary/export.json" \
+        "$temporary/share.json"
 } | HOME="$temporary/home" \
     TELOS_AGENT_MODEL=unconfigured "$telos" chat >"$temporary/commands.output"
 grep -Fq "session imported" "$temporary/commands.output"
@@ -106,6 +107,7 @@ grep -Fq "Plugin-backed Pi-compatible terminal agent" \
     "$temporary/commands.output"
 grep -Fq "trusted project root:" "$temporary/commands.output"
 grep -Fq "session exported" "$temporary/commands.output"
+grep -Fq "session resumed" "$temporary/commands.output"
 test -s "$temporary/export.json"
 test -s "$temporary/share.json"
 

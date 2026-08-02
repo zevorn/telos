@@ -1218,9 +1218,22 @@ static bool resume_command(const char *arguments,
                            struct telos_error **error)
 {
     struct chat_session *chat = context;
+    struct telos_value *items = NULL;
+    bool result;
 
-    (void)arguments;
     (void)cancel;
+    if (arguments != NULL && arguments[0] != '\0') {
+        items = read_session_file(arguments, error);
+        if (items == NULL) {
+            return false;
+        }
+        result = replace_messages(chat, items, error);
+        telos_value_release(items);
+        if (!result || !checkpoint_messages(chat, error)) {
+            return false;
+        }
+        return emit_notice(emit, emit_context, "session resumed", error);
+    }
     if (chat->checkpoint_count == 0) {
         return emit_notice(emit, emit_context, "no session checkpoint exists",
                            error);
@@ -1631,7 +1644,7 @@ static bool register_chat_commands(struct chat_session *chat,
         },
         {
             .name = "resume",
-            .help = "resume the session fork checkpoint",
+            .help = "resume a checkpoint or exported session file",
             .run = resume_command,
             .context = chat,
         },
