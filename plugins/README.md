@@ -8,6 +8,7 @@ released under the same rules as the Plugins maintained by the core team.
 
 | Plugin | Kind | Platforms |
 | --- | --- | --- |
+| [OpenAI Codex Authentication](authentication/openai-codex/README.md) | Authentication | Linux and macOS |
 | [OpenAI Responses](providers/openai-responses/README.md) | Provider | Linux, macOS, and Zephyr |
 | [Memory Store](stores/memory/README.md) | Store | Linux, macOS, and Zephyr |
 | [Ring Store](stores/ring/README.md) | Store | Linux, macOS, and Zephyr |
@@ -45,6 +46,7 @@ Plugins are grouped by extension kind:
 
 ```text
 plugins/
+├── authentication/
 ├── context-sources/
 ├── providers/
 ├── resources/

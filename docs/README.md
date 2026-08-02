@@ -34,11 +34,12 @@ terminal Agent:
 
 ```sh
 TELOS_AGENT_MODEL='your-responses-model' \
-OPENAI_API_KEY='your-api-key' \
 build/tools/telos
 ```
 
-See [linux-agent.md](linux-agent.md) for the complete setup and local endpoint
+Type `login` inside the TUI to authenticate with OpenAI. See
+[openai-login.md](openai-login.md) for the device-code flow and
+[linux-agent.md](linux-agent.md) for the complete terminal and local endpoint
 workflow.
 
 The default build contains the Core and all official Plugins in this
@@ -95,6 +96,7 @@ The repository currently ships these Plugins:
 
 | Plugin | Kind | Purpose |
 | --- | --- | --- |
+| `dev.zevorn.openai-codex-auth` | Authentication | Provides OpenAI device login, token refresh, and a private host credential cache. |
 | `dev.zevorn.openai-responses` | Provider | Maps provider-neutral requests and streaming Events to the OpenAI Responses protocol. |
 | `dev.zevorn.memory-store` | Store | Keeps an unbounded Event sequence in memory. |
 | `dev.zevorn.ring-store` | Store | Keeps a fixed-capacity Event window. |
@@ -349,6 +351,7 @@ telos/
 ├── include/telos/       Core public interfaces
 ├── src/                 Core implementations
 ├── plugins/             Official and contributed Plugins
+│   ├── authentication/
 │   ├── context-sources/
 │   ├── providers/
 │   ├── resources/

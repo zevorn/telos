@@ -49,7 +49,6 @@ meson setup build -Dcurl_transport=enabled
 meson compile -C build
 
 export TELOS_AGENT_MODEL='your-responses-model'
-export OPENAI_API_KEY='your-api-key'
 build/tools/telos
 ```
 
@@ -58,6 +57,11 @@ Running `telos` without a command opens the interactive terminal UI. Use
 `telos run 'your prompt'`. Responses-compatible local servers can be selected
 with `TELOS_AGENT_ENDPOINT=http://127.0.0.1:PORT/v1`; loopback HTTP does not
 require a real API key.
+
+Inside the TUI, type `login` or `/login` to authenticate with an OpenAI
+ChatGPT account. API-key authentication remains available through
+`OPENAI_API_KEY`. See [the OpenAI login guide](docs/openai-login.md) for the
+device-code flow, credential storage, status, and logout commands.
 
 See [the terminal Agent guide](docs/linux-agent.md) for configuration,
 key bindings, local endpoints, and troubleshooting.
@@ -69,6 +73,7 @@ key bindings, local endpoints, and troubleshooting.
 - [official Plugins and contribution guide](plugins/README.md)
 - [verification guide](docs/testing.md)
 - [terminal Agent on Linux and macOS](docs/linux-agent.md)
+- [OpenAI login from the terminal](docs/openai-login.md)
 
 Replaceable behavior belongs in `plugins/`; Core is limited to shared runtime
 invariants and extension interfaces. Contributions of focused, well-tested

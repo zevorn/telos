@@ -23,14 +23,24 @@ omitting the Transport when the dependency is unavailable.
 
 ## Start an interactive session
 
-Select a Responses-compatible model and provide its API key through the
-trusted environment boundary:
+Start the terminal and sign in from inside the TUI:
+
+```sh
+build/tools/telos
+```
+
+Type `login` or `/login`, then open the displayed URL and enter its device
+code. The TUI starts without a configured model so login and status commands
+remain available. Before sending the first prompt, set a Responses-compatible
+model and restart the process:
 
 ```sh
 export TELOS_AGENT_MODEL='your-responses-model'
-export OPENAI_API_KEY='your-api-key'
 build/tools/telos
 ```
+
+See [openai-login.md](openai-login.md) for credential storage, refresh,
+status, logout, and the API-key alternative.
 
 The following forms are equivalent when starting an interactive session:
 
@@ -62,9 +72,9 @@ build/tools/telos
 ```
 
 A loopback endpoint receives a non-secret placeholder bearer value when no API
-key is set. For HTTPS services, set `TELOS_AGENT_API_KEY` or
-`OPENAI_API_KEY`. Do not place credentials in `telos.toml`, command arguments,
-prompts, logs, or Plugin RPC.
+key is set. For other Responses-compatible HTTPS services, set
+`TELOS_AGENT_API_KEY` or `OPENAI_API_KEY`. Do not place credentials in
+`telos.toml`, command arguments, prompts, logs, or Plugin RPC.
 
 ## Configuration
 
@@ -110,8 +120,10 @@ later at the trusted Provider boundary and never enter that snapshot.
 | Esc or Ctrl+C | Cancel the active Turn, clear input, or exit when idle |
 
 Bracketed paste is enabled. `/help` displays commands, `/clear` drops the
-bounded conversation history, and `/quit` exits. When stdin or stdout is not a
-terminal, the Frontend automatically uses a plain line-oriented format.
+bounded conversation history, and `/quit` exits. `login` or `/login` starts
+OpenAI device login, `/login status` shows the current account state, and
+`logout` or `/logout` removes the cached session. When stdin or stdout is not
+a terminal, the Frontend automatically uses a plain line-oriented format.
 
 ## Resource bounds
 
@@ -121,7 +133,7 @@ entries with 2 KiB text fragments, and the partial output buffer is 8 KiB.
 The CLI retains at most 64 conversation messages and 4 MiB of message text;
 oldest user/assistant pairs are released when either limit is reached.
 
-The terminal, Provider, Transport, and Project Guidance implementations remain
-separate Plugins. Zephyr builds do not link the POSIX terminal or libcurl and
-can provide platform-native Frontend and Transport Plugins through the same
-interfaces.
+The terminal, Authentication, Provider, Transport, and Project Guidance
+implementations remain separate Plugins. Zephyr builds do not link the POSIX
+terminal, OpenAI OAuth, or libcurl and can provide platform-native Plugins
+through the same interfaces.

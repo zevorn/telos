@@ -90,9 +90,11 @@ least 90% line coverage and 80% branch coverage. The
 `malloc`, `calloc`, and `realloc` call for the public subsystems it exercises.
 
 When libcurl is available, `terminal-frontend`, `terminal-tui`,
-`curl-transport`, and `agent-chat` cover plain pipes, a real pseudoterminal,
-cancellation validation, and an end-to-end local streaming Responses request.
-No model credential is used by these tests.
+`curl-transport`, `agent-chat`, and `agent-chat-oauth` cover plain pipes, a
+real pseudoterminal, cancellation validation, OpenAI device login, credential
+headers, and end-to-end local streaming Responses requests. The OAuth fixture
+uses only loopback endpoints and synthetic credentials; no model credential is
+used by these tests.
 
 ## macOS development host
 
