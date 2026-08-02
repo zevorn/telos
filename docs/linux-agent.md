@@ -39,11 +39,14 @@ export TELOS_AGENT_MODEL='your-responses-model'
 build/tools/telos
 ```
 
-The running TUI accepts `/model` to list the catalog and `/model
-openai/gpt-5` to select a model without restarting. `/model PROVIDER/MODEL`
-registers a bounded custom model when it is not in the official catalog, so a
-new upstream model does not require a Telos rebuild. `/thinking LEVEL` updates
-the provider request options for reasoning-capable models.
+The running TUI accepts `/model` to list the catalog of the current
+Provider and `/model openai/gpt-5` to select a model without restarting.
+Once a model is selected, `/model` lists only the models offered by that
+Provider; use scoped listing to avoid mixing unrelated vendors. `/model
+PROVIDER/MODEL` registers a bounded custom model when it is not in the
+official catalog, so a new upstream model does not require a Telos rebuild.
+`/thinking LEVEL` updates the provider request options for reasoning-capable
+models.
 
 See [openai-login.md](openai-login.md) for credential storage, refresh,
 status, logout, and the API-key alternative.

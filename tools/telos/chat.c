@@ -1435,6 +1435,7 @@ static bool login_status_command(const struct chat_session *chat,
 
 struct model_list_context {
     char text[TELOS_COMMAND_ARGUMENT_SIZE];
+    const char *provider_filter;
     size_t used;
 };
 
@@ -1445,6 +1446,10 @@ static bool append_model_list(const struct telos_model_descriptor *model,
     int written;
 
     (void)error;
+    if (list->provider_filter != NULL &&
+        strcmp(list->provider_filter, model->provider) != 0) {
+        return true;
+    }
     written = snprintf(list->text + list->used,
                        sizeof(list->text) - list->used, "%s/%s\n",
                        model->provider, model->id);
@@ -2161,13 +2166,25 @@ static bool model_command(const char *arguments,
             error != NULL && *error != NULL) {
             return false;
         }
+        if (chat->selected_model != NULL) {
+            list.provider_filter = chat->selected_model->provider;
+        } else if (chat->configured_provider != NULL &&
+                   strcmp(chat->configured_provider, "unconfigured") != 0) {
+            list.provider_filter = chat->configured_provider;
+        } else {
+            list.provider_filter = NULL;
+        }
         if (!telos_model_catalog_visit(&chat->model_catalog,
                                        append_model_list, &list, error)) {
             return false;
         }
         if (list.used == 0) {
-            memcpy(list.text, "No models are configured", sizeof(
-                       "No models are configured"));
+            const char *message =
+                list.provider_filter == NULL
+                    ? "No models are configured"
+                    : "No models are configured for the current provider";
+
+            memcpy(list.text, message, strlen(message) + 1);
         }
         return emit_frontend(&observer, TELOS_FRONTEND_NOTICE, list.text,
                              NULL, error);

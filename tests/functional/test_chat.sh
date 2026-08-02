@@ -176,6 +176,16 @@ grep -Fq "session exported" "$temporary/commands.output"
 grep -Fq "session resumed" "$temporary/commands.output"
 test -s "$temporary/export.json"
 test -s "$temporary/share.json"
+printf '/model openai/gpt-5\n/model\n/quit\n' | \
+    HOME="$temporary/home" TELOS_AGENT_MODEL=unconfigured \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/filtered.output"
+grep -Fq "Model set to openai/gpt-5" "$temporary/filtered.output"
+grep -Fq "openai/gpt-5" "$temporary/filtered.output"
+if grep -Fq "deepseek/" "$temporary/filtered.output"; then
+    echo "current provider model list leaked another provider" >&2
+    exit 1
+fi
 printf '/session\n/quit\n' | HOME="$temporary/home" \
     TELOS_AGENT_MODEL=unconfigured \
     TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
