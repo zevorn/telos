@@ -96,7 +96,7 @@ printf '/quit\n' | HOME="$temporary/home" \
     "$telos" >"$temporary/default.output"
 grep -Fq "Telos 0.1.0" "$temporary/default.output"
 
-printf '/login status\n/quit\n' | HOME="$temporary/home" \
+printf 'login status\n/quit\n' | HOME="$temporary/home" \
     TELOS_AGENT_MODEL=unconfigured \
     "$telos" chat >"$temporary/login-ready.output"
 grep -Fq "OpenAI is logged out" "$temporary/login-ready.output"

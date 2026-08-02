@@ -1115,6 +1115,31 @@ static bool start_turn(struct terminal_state *state, const char *prompt,
     bool exit_requested = false;
     int result;
 
+    if (strncmp(prompt, "login", sizeof("login") - 1) == 0 &&
+        (prompt[sizeof("login") - 1] == '\0' ||
+         prompt[sizeof("login") - 1] == ' ')) {
+        char command[sizeof(state->input)];
+
+        if (snprintf(command, sizeof(command), "/%s", prompt) >=
+            (int)sizeof(command)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Login command is too long");
+            return false;
+        }
+        return start_turn(state, command, error);
+    }
+    if (strcmp(prompt, "logout") == 0 || strcmp(prompt, "login-status") == 0) {
+        char command[sizeof(state->input)];
+
+        if (snprintf(command, sizeof(command), "/%s", prompt) >=
+            (int)sizeof(command)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Authentication command is too long");
+            return false;
+        }
+        return start_turn(state, command, error);
+    }
+
     if (strcmp(prompt, "/quit") == 0 || strcmp(prompt, "/exit") == 0) {
         state->exit_requested = true;
         return true;
@@ -1434,6 +1459,22 @@ static bool complete_command(struct terminal_state *state)
                                              .name);
     state->input_cursor = state->input_size;
     return true;
+}
+
+static void normalize_auth_command(char *line, size_t capacity)
+{
+    if (line == NULL || capacity < 2 || line[0] == '/' ||
+        !((strncmp(line, "login", sizeof("login") - 1) == 0 &&
+           (line[sizeof("login") - 1] == '\0' ||
+            line[sizeof("login") - 1] == ' ')) ||
+          strcmp(line, "logout") == 0 || strcmp(line, "login-status") == 0)) {
+        return;
+    }
+    if (strlen(line) + 2 > capacity) {
+        return;
+    }
+    memmove(line + 1, line, strlen(line) + 1);
+    line[0] = '/';
 }
 
 static bool key_sequence(const char *data, size_t size, const char *sequence)
@@ -2007,6 +2048,7 @@ static bool run_plain(struct terminal_state *state, struct telos_error **error)
         if (size == 0) {
             return true;
         }
+        normalize_auth_command(line, sizeof(line));
         if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
             return true;
         }
@@ -2311,6 +2353,7 @@ static bool run_json(struct terminal_state *state, struct telos_error **error)
         if (size == 0) {
             return true;
         }
+        normalize_auth_command(line, sizeof(line));
         if (strcmp(line, "/quit") == 0 || strcmp(line, "/exit") == 0) {
             return true;
         }
@@ -2459,6 +2502,8 @@ static bool run_rpc(struct terminal_state *state, struct telos_error **error)
         {
             bool handled = false;
             bool exit_requested = false;
+
+            normalize_auth_command(payload, sizeof(payload));
 
             if (state->session->commands == NULL ||
                 !telos_command_registry_dispatch(
