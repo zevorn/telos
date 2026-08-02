@@ -264,11 +264,33 @@ static const char *provider_display_name(const char *provider)
     if (strcmp(provider, "deepseek") == 0) {
         return "DeepSeek";
     }
-    if (strcmp(provider, "zai") == 0) {
+    if (strcmp(provider, "zai") == 0 || strcmp(provider, "z.ai") == 0 ||
+        strcmp(provider, "z-ai") == 0) {
         return "Z.AI";
     }
     if (strcmp(provider, "anthropic") == 0) {
         return "Anthropic";
+    }
+    return provider;
+}
+
+static const char *canonical_provider(const char *provider)
+{
+    if (provider == NULL) {
+        return NULL;
+    }
+    if (strcmp(provider, "openai-responses") == 0 ||
+        strcmp(provider, "openai-chat") == 0 ||
+        strcmp(provider, "dev.zevorn.openai-responses") == 0 ||
+        strcmp(provider, "dev.zevorn.openai-chat") == 0) {
+        return "openai";
+    }
+    if (strcmp(provider, "z.ai") == 0 || strcmp(provider, "z-ai") == 0 ||
+        strcmp(provider, "glm") == 0) {
+        return "zai";
+    }
+    if (strcmp(provider, "claude") == 0) {
+        return "anthropic";
     }
     return provider;
 }
@@ -1995,16 +2017,7 @@ static bool select_configured_model(struct chat_session *chat,
                                     const char *model,
                                     struct telos_error **error)
 {
-    const char *provider =
-        strcmp(provider_name, "openai") == 0 ||
-        strcmp(provider_name, "openai-responses") == 0 ||
-        strcmp(provider_name, "dev.zevorn.openai-responses") == 0
-                               ? "openai"
-                               : (strcmp(provider_name, "openai-chat") == 0 ||
-                                          strcmp(provider_name,
-                                                 "dev.zevorn.openai-chat") == 0
-                                      ? "openai"
-                                      : provider_name);
+    const char *provider = canonical_provider(provider_name);
 
     chat->configured_provider = provider;
     if (model == NULL || model[0] == '\0' || strcmp(model, "unconfigured") ==
@@ -2058,12 +2071,10 @@ static bool initialize_chat(struct chat_session *chat,
         return false;
     }
     if (provider_name == NULL ||
-        (strcmp(provider_name, "openai") != 0 &&
-         strcmp(provider_name, "openai-responses") != 0 &&
-         strcmp(provider_name, "dev.zevorn.openai-responses") != 0 &&
-         strcmp(provider_name, "deepseek") != 0 &&
-         strcmp(provider_name, "zai") != 0 &&
-         strcmp(provider_name, "anthropic") != 0)) {
+        (strcmp(canonical_provider(provider_name), "openai") != 0 &&
+         strcmp(canonical_provider(provider_name), "deepseek") != 0 &&
+         strcmp(canonical_provider(provider_name), "zai") != 0 &&
+         strcmp(canonical_provider(provider_name), "anthropic") != 0)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
                   "The configured Agent Provider is not available");
         return false;

@@ -563,7 +563,7 @@ static int agent_command(const struct cli_options *options,
                        &error)) {
         return 0;
     }
-    result = print_error(false, 3, error, "Agent terminal failed");
+    result = print_error(options->json, 3, error, "Agent terminal failed");
     telos_error_release(error);
     return result;
 }
