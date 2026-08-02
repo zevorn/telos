@@ -80,6 +80,7 @@ printf '[{"role":"user","content":"saved"}]\n' \
         '/resume' \
         '/compact' \
         '/scoped-models' \
+        '/model openai/gpt-5' \
         '/settings' \
         '/reload' \
         '/hotkeys' \
@@ -89,7 +90,9 @@ printf '[{"role":"user","content":"saved"}]\n' \
         "$temporary/export.json" "$temporary/export.json" \
         "$temporary/share.json"
 } | HOME="$temporary/home" \
-    TELOS_AGENT_MODEL=unconfigured "$telos" chat >"$temporary/commands.output"
+    TELOS_AGENT_MODEL=unconfigured \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/commands.output"
 grep -Fq "session imported" "$temporary/commands.output"
 grep -Fq "session named: command-test" "$temporary/commands.output"
 grep -Fq "session command-test" "$temporary/commands.output"
@@ -98,8 +101,9 @@ grep -Fq "session fork checkpoint saved" "$temporary/commands.output"
 grep -Fq "new session started" "$temporary/commands.output"
 grep -Fq "session checkpoint resumed" "$temporary/commands.output"
 grep -Fq "conversation compacted" "$temporary/commands.output"
-grep -Fq "provider=openai model=not configured" \
+grep -Fq "provider=openai model=gpt-5 endpoint=http://127.0.0.1:1/v1" \
     "$temporary/commands.output"
+grep -Fq "Model set to openai/gpt-5" "$temporary/commands.output"
 grep -Fq "runtime guidance reloaded" \
     "$temporary/commands.output"
 grep -Fq "Ctrl+J or Alt+Enter" "$temporary/commands.output"
