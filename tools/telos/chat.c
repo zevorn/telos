@@ -10,7 +10,10 @@
 
 #include <telos/agent.h>
 #include <telos/authentication.h>
+#include <telos/command.h>
+#include <telos/model.h>
 #include <telos/plugins/curl_transport.h>
+#include <telos/plugins/model_catalog.h>
 #include <telos/plugins/openai_codex_auth.h>
 #include <telos/plugins/openai_responses.h>
 #include <telos/plugins/project_guidance.h>
@@ -49,6 +52,10 @@ struct chat_session {
     const char *configured_endpoint;
     struct telos_transport_header authentication_headers[4];
     struct telos_curl_transport_config transport;
+    struct telos_model_catalog model_catalog;
+    struct telos_command_registry commands;
+    const struct telos_model_descriptor *selected_model;
+    const char *configured_provider;
 };
 
 struct observer_context {
@@ -64,6 +71,25 @@ static void set_error(struct telos_error **error,
     if (error != NULL && *error == NULL) {
         *error = telos_error_create(domain, code, message, NULL);
     }
+}
+
+static const char *chat_provider_get(void *context)
+{
+    const struct chat_session *chat = context;
+
+    if (chat->selected_model != NULL) {
+        return chat->selected_model->provider;
+    }
+    return chat->configured_provider == NULL ? "unconfigured"
+                                             : chat->configured_provider;
+}
+
+static const char *chat_model_get(void *context)
+{
+    const struct chat_session *chat = context;
+
+    return chat->selected_model == NULL ? "not configured"
+                                        : chat->selected_model->id;
 }
 
 static char *copy_text(const char *text)
@@ -539,6 +565,152 @@ static bool login_status_command(const struct chat_session *chat,
                          error);
 }
 
+struct model_list_context {
+    char text[TELOS_COMMAND_ARGUMENT_SIZE];
+    size_t used;
+};
+
+static bool append_model_list(const struct telos_model_descriptor *model,
+                              void *context, struct telos_error **error)
+{
+    struct model_list_context *list = context;
+    int written;
+
+    (void)error;
+    written = snprintf(list->text + list->used,
+                       sizeof(list->text) - list->used, "%s/%s\n",
+                       model->provider, model->id);
+    if (written < 0 || (size_t)written >= sizeof(list->text) - list->used) {
+        return false;
+    }
+    list->used += (size_t)written;
+    return true;
+}
+
+static bool clear_command(const char *arguments,
+                          const struct telos_cancel *cancel,
+                          telos_frontend_emit_fn emit, void *emit_context,
+                          void *context, struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    struct observer_context observer = {
+        .emit = emit,
+        .emit_context = emit_context,
+    };
+
+    (void)arguments;
+    (void)cancel;
+    clear_messages(chat);
+    return emit_frontend(&observer, TELOS_FRONTEND_NOTICE,
+                         "conversation cleared", NULL, error);
+}
+
+static bool model_command(const char *arguments,
+                          const struct telos_cancel *cancel,
+                          telos_frontend_emit_fn emit, void *emit_context,
+                          void *context, struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    struct observer_context observer = {
+        .emit = emit,
+        .emit_context = emit_context,
+    };
+    struct model_list_context list = {0};
+    char message[TELOS_COMMAND_ARGUMENT_SIZE];
+    const struct telos_model_descriptor *model;
+
+    (void)cancel;
+    if (arguments == NULL || arguments[0] == '\0') {
+        if (!telos_model_catalog_visit(&chat->model_catalog,
+                                       append_model_list, &list, error)) {
+            return false;
+        }
+        if (list.used == 0) {
+            memcpy(list.text, "No models are configured", sizeof(
+                       "No models are configured"));
+        }
+        return emit_frontend(&observer, TELOS_FRONTEND_NOTICE, list.text,
+                             NULL, error);
+    }
+    if (!telos_model_catalog_select_spec(&chat->model_catalog, arguments,
+                                         error)) {
+        return false;
+    }
+    model = telos_model_catalog_current(&chat->model_catalog);
+    if (model == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_STATE, EINVAL,
+                  "Selected model is unavailable");
+        return false;
+    }
+    if (model->api != TELOS_MODEL_API_OPENAI_RESPONSES) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
+                  "The selected Provider Plugin is not available yet");
+        return false;
+    }
+    chat->selected_model = model;
+    chat->model = model->id;
+    if (!create_provider(chat, error)) {
+        return false;
+    }
+    if (snprintf(message, sizeof(message), "Model set to %s/%s",
+                 model->provider, model->id) >= (int)sizeof(message)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Selected model name is too long");
+        return false;
+    }
+    return emit_frontend(&observer, TELOS_FRONTEND_NOTICE, message, NULL,
+                         error);
+}
+
+static bool login_command_handler(const char *arguments,
+                                  const struct telos_cancel *cancel,
+                                  telos_frontend_emit_fn emit,
+                                  void *emit_context, void *context,
+                                  struct telos_error **error)
+{
+    struct observer_context observer = {
+        .emit = emit,
+        .emit_context = emit_context,
+    };
+
+    if (arguments != NULL && strcmp(arguments, "status") == 0) {
+        return login_status_command(context, &observer, error);
+    }
+    return login_command(context, cancel, &observer, error);
+}
+
+static bool logout_command_handler(const char *arguments,
+                                   const struct telos_cancel *cancel,
+                                   telos_frontend_emit_fn emit,
+                                   void *emit_context, void *context,
+                                   struct telos_error **error)
+{
+    struct observer_context observer = {
+        .emit = emit,
+        .emit_context = emit_context,
+    };
+
+    (void)arguments;
+    (void)cancel;
+    return logout_command(context, &observer, error);
+}
+
+static bool login_status_command_handler(const char *arguments,
+                                         const struct telos_cancel *cancel,
+                                         telos_frontend_emit_fn emit,
+                                         void *emit_context, void *context,
+                                         struct telos_error **error)
+{
+    struct observer_context observer = {
+        .emit = emit,
+        .emit_context = emit_context,
+    };
+
+    (void)arguments;
+    (void)cancel;
+    return login_status_command(context, &observer, error);
+}
+
 static bool chat_turn(const char *input, const struct telos_cancel *cancel,
                       telos_frontend_emit_fn emit, void *emit_context,
                       void *turn_context, struct telos_error **error)
@@ -552,20 +724,6 @@ static bool chat_turn(const char *input, const struct telos_cancel *cancel,
     struct telos_value *items = NULL;
     bool success = false;
 
-    if (strcmp(input, "/clear") == 0) {
-        clear_messages(chat);
-        return emit_frontend(&observer, TELOS_FRONTEND_NOTICE,
-                             "conversation cleared", NULL, error);
-    }
-    if (strcmp(input, "/login") == 0 || strcmp(input, "login") == 0) {
-        return login_command(chat, cancel, &observer, error);
-    }
-    if (strcmp(input, "/logout") == 0 || strcmp(input, "logout") == 0) {
-        return logout_command(chat, &observer, error);
-    }
-    if (strcmp(input, "/login status") == 0) {
-        return login_status_command(chat, &observer, error);
-    }
     if (chat->provider == NULL) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
                   "Set agent.model or TELOS_AGENT_MODEL before sending "
@@ -614,6 +772,95 @@ cleanup:
     return success;
 }
 
+static bool register_chat_commands(struct chat_session *chat,
+                                   struct telos_error **error)
+{
+    const struct telos_command commands[] = {
+        {
+            .name = "clear",
+            .help = "clear the Agent conversation",
+            .run = clear_command,
+            .context = chat,
+        },
+        {
+            .name = "model",
+            .help = "list or select a model",
+            .run = model_command,
+            .context = chat,
+        },
+        {
+            .name = "login",
+            .help = "sign in to a Provider",
+            .run = login_command_handler,
+            .context = chat,
+        },
+        {
+            .name = "logout",
+            .help = "sign out of a Provider",
+            .run = logout_command_handler,
+            .context = chat,
+        },
+        {
+            .name = "login-status",
+            .help = "show Provider authentication status",
+            .run = login_status_command_handler,
+            .context = chat,
+        },
+    };
+
+    telos_command_registry_initialize(&chat->commands);
+    for (size_t index = 0; index < sizeof(commands) / sizeof(commands[0]);
+         ++index) {
+        if (!telos_command_registry_add(&chat->commands, &commands[index],
+                                        error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool select_configured_model(struct chat_session *chat,
+                                    const char *provider_name,
+                                    const char *model,
+                                    struct telos_error **error)
+{
+    const char *provider = strcmp(provider_name, "openai") == 0
+                               ? "openai"
+                               : (strcmp(provider_name, "openai-responses") == 0
+                                      ? "openai"
+                                      : provider_name);
+
+    chat->configured_provider = provider;
+    if (model == NULL || model[0] == '\0' || strcmp(model, "unconfigured") ==
+                                               0) {
+        return true;
+    }
+    if (telos_model_catalog_find(&chat->model_catalog, provider, model) ==
+        NULL) {
+        const struct telos_model_descriptor custom = {
+            .provider = provider,
+            .id = model,
+            .name = model,
+            .api = strcmp(provider, "openai") == 0
+                       ? TELOS_MODEL_API_OPENAI_RESPONSES
+                       : TELOS_MODEL_API_OPENAI_CHAT,
+            .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                            TELOS_MODEL_CAPABILITY_TOOLS,
+        };
+
+        if (!telos_model_catalog_add(&chat->model_catalog, &custom, error)) {
+            return false;
+        }
+    }
+    if (!telos_model_catalog_select(&chat->model_catalog, provider, model,
+                                    error)) {
+        return false;
+    }
+    chat->selected_model = telos_model_catalog_current(&chat->model_catalog);
+    chat->model = chat->selected_model->id;
+    return true;
+}
+
 static bool initialize_chat(struct chat_session *chat,
                             const struct telos_config *config,
                             const char *home_directory,
@@ -644,10 +891,12 @@ static bool initialize_chat(struct chat_session *chat,
     chat->loopback_authentication =
         authentication_endpoint != NULL &&
         endpoint_is_loopback(authentication_endpoint);
-    chat->model = model != NULL && model[0] != '\0' &&
-                          strcmp(model, "unconfigured") != 0
-                      ? model
-                      : NULL;
+    telos_model_catalog_initialize(&chat->model_catalog);
+    if (!telos_official_model_catalog_add(&chat->model_catalog, error) ||
+        !select_configured_model(chat, provider_name, model, error) ||
+        !register_chat_commands(chat, error)) {
+        return false;
+    }
     chat->configured_endpoint = endpoint;
     chat->transport.timeout_milliseconds =
         TELOS_CURL_DEFAULT_TIMEOUT_MILLISECONDS;
@@ -761,8 +1010,12 @@ bool telos_chat_run(const struct telos_config *config,
             .model = model,
             .working_directory = current_directory,
             .command_help =
-                "/login  sign in · /login status · /logout  sign out",
+                "/model  select model · /login-status  show auth status",
             .initial_prompt = initial_prompt,
+            .commands = &chat.commands,
+            .provider_get = chat_provider_get,
+            .model_get = chat_model_get,
+            .identity_context = &chat,
             .single_turn = single_turn,
             .turn = chat_turn,
             .turn_context = &chat,
