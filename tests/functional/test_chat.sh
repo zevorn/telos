@@ -99,12 +99,12 @@ grep -Fq "session checkpoint resumed" "$temporary/commands.output"
 grep -Fq "conversation compacted" "$temporary/commands.output"
 grep -Fq "provider=openai model=not configured" \
     "$temporary/commands.output"
-grep -Fq "runtime guidance is refreshed per turn" \
+grep -Fq "runtime guidance reloaded" \
     "$temporary/commands.output"
 grep -Fq "Ctrl+J or Alt+Enter" "$temporary/commands.output"
 grep -Fq "Plugin-backed Pi-compatible terminal agent" \
     "$temporary/commands.output"
-grep -Fq "current trusted root" "$temporary/commands.output"
+grep -Fq "trusted project root:" "$temporary/commands.output"
 grep -Fq "session exported" "$temporary/commands.output"
 test -s "$temporary/export.json"
 test -s "$temporary/share.json"

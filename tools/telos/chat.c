@@ -62,6 +62,8 @@ struct chat_session {
     struct telos_command_registry commands;
     const struct telos_model_descriptor *selected_model;
     const char *configured_provider;
+    const char *home_directory;
+    const char *current_directory;
     char session_name[CHAT_SESSION_NAME_SIZE];
     struct telos_value *checkpoint[CHAT_MAXIMUM_MESSAGES];
     size_t checkpoint_count;
@@ -75,6 +77,12 @@ struct observer_context {
 
 static void drop_messages(struct chat_session *chat, size_t count);
 static void clear_messages(struct chat_session *chat);
+static bool create_prompt(struct chat_session *chat,
+                          const char *home_directory,
+                          const char *current_directory,
+                          struct telos_error **error);
+static bool find_project_root(const char *current_directory,
+                              char root[CHAT_PATH_SIZE]);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -1307,6 +1315,56 @@ static bool settings_command(const char *arguments,
     return emit_notice(emit, emit_context, message, error);
 }
 
+static bool reload_command(const char *arguments,
+                           const struct telos_cancel *cancel,
+                           telos_frontend_emit_fn emit,
+                           void *emit_context,
+                           void *context,
+                           struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    struct telos_prompt_snapshot *prompt;
+
+    (void)arguments;
+    (void)cancel;
+    prompt = chat->prompt;
+    chat->prompt = NULL;
+    if (!create_prompt(chat, chat->home_directory, chat->current_directory,
+                       error)) {
+        chat->prompt = prompt;
+        return false;
+    }
+    telos_prompt_snapshot_release(prompt);
+    return emit_notice(emit, emit_context, "runtime guidance reloaded", error);
+}
+
+static bool trust_command(const char *arguments,
+                          const struct telos_cancel *cancel,
+                          telos_frontend_emit_fn emit,
+                          void *emit_context,
+                          void *context,
+                          struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char root[CHAT_PATH_SIZE];
+    char message[CHAT_PATH_SIZE + 32];
+
+    (void)arguments;
+    (void)cancel;
+    if (!find_project_root(chat->current_directory, root)) {
+        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                  "Trusted project root could not be resolved");
+        return false;
+    }
+    if (snprintf(message, sizeof(message), "trusted project root: %s", root) >=
+        (int)sizeof(message)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Trusted project root is too long");
+        return false;
+    }
+    return emit_notice(emit, emit_context, message, error);
+}
+
 static bool static_notice_command(const char *arguments,
                                   const struct telos_cancel *cancel,
                                   telos_frontend_emit_fn emit,
@@ -1593,8 +1651,8 @@ static bool register_chat_commands(struct chat_session *chat,
         {
             .name = "reload",
             .help = "reload runtime guidance",
-            .run = static_notice_command,
-            .context = "runtime guidance is refreshed per turn",
+            .run = reload_command,
+            .context = chat,
         },
         {
             .name = "hotkeys",
@@ -1613,9 +1671,8 @@ static bool register_chat_commands(struct chat_session *chat,
         {
             .name = "trust",
             .help = "show project trust policy",
-            .run = static_notice_command,
-            .context =
-                "project guidance is loaded from the current trusted root",
+            .run = trust_command,
+            .context = chat,
         },
         {
             .name = "share",
@@ -1716,6 +1773,8 @@ static bool initialize_chat(struct chat_session *chat,
         getenv("TELOS_OPENAI_AUTH_ENDPOINT");
     char authentication_directory[CHAT_PATH_SIZE];
 
+    chat->home_directory = home_directory;
+    chat->current_directory = current_directory;
     if (provider_name == NULL ||
         (strcmp(provider_name, "openai") != 0 &&
          strcmp(provider_name, "openai-responses") != 0 &&
