@@ -55,6 +55,12 @@ build/tools/telos chat
 build/tools/telos chat 'start with this request'
 ```
 
+Pass `--continue` to load the newest saved session before drawing the prompt:
+
+```sh
+build/tools/telos --continue chat
+```
+
 For scripts or a quick smoke test, run exactly one Turn:
 
 ```sh

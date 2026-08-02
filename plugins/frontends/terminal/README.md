@@ -24,3 +24,8 @@ Alt+Enter inserts a line, arrow keys move the cursor, and Esc requests
 cooperative cancellation. One prompt may be queued while a Turn is active.
 Inputs are limited to 16 KiB, the cross-thread Event queue is fixed at 64
 entries, and each queued text fragment is limited to 2 KiB.
+
+`!command` executes a bounded shell command in the session working directory;
+`!!command` feeds its output into the next Agent Turn. Ctrl+G opens the prompt
+in `$VISUAL` or `$EDITOR`, Ctrl+L redraws the screen, Tab completes a command,
+and `/copy` uses OSC 52 when the terminal supports clipboard control.

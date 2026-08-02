@@ -68,6 +68,9 @@ For automation, add `--json` to emit one bounded JSON event per line:
 build/tools/telos --json run 'your prompt'
 ```
 
+Use `--continue` with `chat` to load the newest bounded JSONL session from
+`~/.telos/sessions` before accepting new input.
+
 Process integrations can use strict JSONL RPC mode. Send a prompt request as
 `{"type":"prompt","message":"..."}` and terminate with
 `{"type":"quit"}`:
