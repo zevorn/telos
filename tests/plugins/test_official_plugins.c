@@ -157,7 +157,8 @@ int main(int argc, char **argv)
     const char *plugin_ids[] = {
         "dev.zevorn.memory-store",   "dev.zevorn.ring-store",
         "dev.zevorn.markdown-store", "dev.zevorn.openai-responses",
-        "dev.zevorn.agent-skills",   "dev.zevorn.project-guidance",
+        "dev.zevorn.openai-chat",    "dev.zevorn.agent-skills",
+        "dev.zevorn.project-guidance",
         "dev.zevorn.openai-codex-auth",
         "dev.zevorn.terminal-frontend", "dev.zevorn.curl-transport",
         "dev.zevorn.model-catalog",
@@ -165,7 +166,7 @@ int main(int argc, char **argv)
     size_t plugin_count;
     struct telos_registry *registry;
     struct telos_host_api_v1 host;
-    struct telos_plugin_module *modules[10] = {0};
+    struct telos_plugin_module *modules[11] = {0};
     struct telos_registry_generation *generation;
     struct telos_value *empty = telos_value_new_object(NULL, NULL, 0);
     struct telos_value *capacity = telos_value_new_integer(2);
@@ -193,7 +194,7 @@ int main(int argc, char **argv)
     struct telos_value *invalid_markdown =
         telos_value_new_object(markdown_keys, empty_path_values, 1);
 
-    assert(argc >= 15 && argc <= 21 && argc % 2 == 1);
+    assert(argc >= 17 && argc <= 23 && argc % 2 == 1);
     plugin_count = ((size_t)argc - 1) / 2;
     assert(descriptor >= 0);
     close(descriptor);
@@ -234,14 +235,24 @@ int main(int argc, char **argv)
         assert(definition->dispatch != NULL);
     }
     {
+        const struct telos_extension_descriptor *provider =
+            find_extension(generation, TELOS_EXTENSION_PROVIDER, plugin_ids[4]);
+        const struct telos_provider_definition_v1 *definition =
+            provider->implementation;
+
+        assert(definition->struct_size >= sizeof(*definition));
+        assert(strcmp(definition->id, plugin_ids[4]) == 0);
+        assert(definition->dispatch != NULL);
+    }
+    {
         const struct telos_extension_descriptor *source = find_extension(
-            generation, TELOS_EXTENSION_CONTEXT_SOURCE, plugin_ids[4]);
+            generation, TELOS_EXTENSION_CONTEXT_SOURCE, plugin_ids[5]);
         const struct telos_resource_source_definition_v1 *definition =
             source->implementation;
         struct telos_resource_manager *manager;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[4]) == 0);
+        assert(strcmp(definition->id, plugin_ids[5]) == 0);
         assert(definition->create != NULL);
         manager = definition->create(NULL, 0, NULL);
         assert(manager != NULL);
@@ -249,24 +260,24 @@ int main(int argc, char **argv)
     }
     {
         const struct telos_extension_descriptor *source = find_extension(
-            generation, TELOS_EXTENSION_CONTEXT_SOURCE, plugin_ids[5]);
+            generation, TELOS_EXTENSION_CONTEXT_SOURCE, plugin_ids[6]);
         const struct telos_project_guidance_definition_v1 *definition =
             source->implementation;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[5]) == 0);
+        assert(strcmp(definition->id, plugin_ids[6]) == 0);
         assert(definition->discover != NULL);
         assert(definition->free_string != NULL);
     }
-    if (plugin_count > 6) {
+    if (plugin_count > 7) {
         const struct telos_extension_descriptor *authentication =
             find_extension(generation, TELOS_EXTENSION_AUTHENTICATION,
-                           plugin_ids[6]);
+                           plugin_ids[7]);
         const struct telos_authentication_definition_v1 *definition =
             authentication->implementation;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[6]) == 0);
+        assert(strcmp(definition->id, plugin_ids[7]) == 0);
         assert(definition->create != NULL);
         assert(definition->destroy != NULL);
         assert(definition->login != NULL);
@@ -274,35 +285,35 @@ int main(int argc, char **argv)
         assert(definition->status != NULL);
         assert(definition->resolve != NULL);
     }
-    if (plugin_count > 7) {
+    if (plugin_count > 8) {
         const struct telos_extension_descriptor *frontend = find_extension(
-            generation, TELOS_EXTENSION_FRONTEND, plugin_ids[7]);
+            generation, TELOS_EXTENSION_FRONTEND, plugin_ids[8]);
         const struct telos_frontend_definition_v1 *definition =
             frontend->implementation;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[7]) == 0);
+        assert(strcmp(definition->id, plugin_ids[8]) == 0);
         assert(definition->run != NULL);
     }
-    if (plugin_count > 8) {
+    if (plugin_count > 9) {
         const struct telos_extension_descriptor *transport = find_extension(
-            generation, TELOS_EXTENSION_TRANSPORT, plugin_ids[8]);
+            generation, TELOS_EXTENSION_TRANSPORT, plugin_ids[9]);
         const struct telos_transport_definition_v1 *definition =
             transport->implementation;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[8]) == 0);
+        assert(strcmp(definition->id, plugin_ids[9]) == 0);
         assert(definition->send != NULL);
     }
-    if (plugin_count > 9) {
+    if (plugin_count > 10) {
         const struct telos_extension_descriptor *catalog = find_extension(
-            generation, TELOS_EXTENSION_MODEL_CATALOG, plugin_ids[9]);
+            generation, TELOS_EXTENSION_MODEL_CATALOG, plugin_ids[10]);
         const struct telos_model_catalog_definition_v1 *definition =
             catalog->implementation;
         struct telos_model_catalog models;
 
         assert(definition->struct_size >= sizeof(*definition));
-        assert(strcmp(definition->id, plugin_ids[9]) == 0);
+        assert(strcmp(definition->id, plugin_ids[10]) == 0);
         assert(definition->add != NULL);
         telos_model_catalog_initialize(&models);
         assert(definition->add(&models, NULL));

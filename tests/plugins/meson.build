@@ -185,11 +185,31 @@ openai_plugin_tests = [
     ],
 ]
 
+openai_chat_plugin_tests = [
+    ['openai-chat-request', 'test-openai-chat-request',
+     'test_openai_chat_request.c'],
+    ['openai-chat-sse', 'test-openai-chat-sse', 'test_openai_chat_sse.c'],
+    ['openai-chat-sse-invalid', 'test-openai-chat-sse-invalid',
+     'test_openai_chat_sse_invalid.c'],
+    ['openai-chat-transport', 'test-openai-chat-transport',
+     'test_openai_chat_transport.c'],
+]
+
 foreach entry : openai_plugin_tests
     plugin_test = executable(
         entry[1],
         entry[2],
         dependencies: telos_openai_responses_plugin_dep,
+    )
+
+    test(entry[0], plugin_test, suite: 'plugins')
+endforeach
+
+foreach entry : openai_chat_plugin_tests
+    plugin_test = executable(
+        entry[1],
+        entry[2],
+        dependencies: telos_openai_chat_plugin_dep,
     )
 
     test(entry[0], plugin_test, suite: 'plugins')
@@ -370,6 +390,7 @@ if get_option('shared_plugins')
         telos_ring_store_module,
         telos_markdown_store_module,
         telos_openai_responses_module,
+        telos_openai_chat_module,
         telos_agent_skills_module,
         telos_project_guidance_module,
     ]
@@ -378,6 +399,7 @@ if get_option('shared_plugins')
         telos_ring_store_module.full_path(),
         telos_markdown_store_module.full_path(),
         telos_openai_responses_module.full_path(),
+        telos_openai_chat_module.full_path(),
         telos_agent_skills_module.full_path(),
         telos_project_guidance_module.full_path(),
     ]
@@ -386,6 +408,7 @@ if get_option('shared_plugins')
         meson.project_source_root() / 'plugins/stores/ring',
         meson.project_source_root() / 'plugins/stores/markdown',
         meson.project_source_root() / 'plugins/providers/openai-responses',
+        meson.project_source_root() / 'plugins/providers/openai-chat',
         meson.project_source_root() / 'plugins/resources/agent-skills',
         meson.project_source_root()
             / 'plugins/context-sources/project-guidance',
