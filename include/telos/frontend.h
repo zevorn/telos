@@ -38,6 +38,7 @@ struct telos_frontend_session {
     const char *provider;
     const char *model;
     const char *working_directory;
+    const char *command_help;
     const char *initial_prompt;
     bool single_turn;
     telos_frontend_turn_fn turn;

@@ -125,4 +125,25 @@ if terminal_frontend_available and curl_transport_available
         suite: 'functional',
         timeout: 30,
     )
+
+    test_oauth_server = executable(
+        'test-oauth-server',
+        'test_oauth_server.c',
+    )
+
+    test(
+        'agent-chat-oauth',
+        test_shell,
+        args: [
+            meson.current_source_dir() / 'test_chat_oauth.sh',
+            telos_cli.full_path(),
+            test_oauth_server.full_path(),
+        ],
+        depends: [
+            telos_cli,
+            test_oauth_server,
+        ],
+        suite: 'functional',
+        timeout: 30,
+    )
 endif

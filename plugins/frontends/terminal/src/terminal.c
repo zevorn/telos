@@ -811,7 +811,15 @@ static void show_help(struct terminal_state *state)
                "Telos commands\r\n"
                "  /help   show this help\r\n"
                "  /clear  clear the Agent conversation\r\n"
-               "  /quit   leave Telos\r\n"
+               "  /quit   leave Telos\r\n");
+    if (state->session->command_help != NULL &&
+        state->session->command_help[0] != '\0') {
+        write_text(state->output_descriptor, "  ");
+        write_sanitized(state, state->session->command_help,
+                        strlen(state->session->command_help));
+        write_text(state->output_descriptor, "\r\n");
+    }
+    write_text(state->output_descriptor,
                "\r\n"
                "Enter submits · Ctrl+J or Alt+Enter adds a line · "
                "Esc cancels\r\n\r\n");
@@ -1432,6 +1440,12 @@ static bool run_plain(struct terminal_state *state, struct telos_error **error)
         if (strcmp(line, "/help") == 0) {
             write_text(state->output_descriptor,
                        "/help /clear /quit\n");
+            if (state->session->command_help != NULL &&
+                state->session->command_help[0] != '\0') {
+                plain_write_sanitized(state->output_descriptor,
+                                      state->session->command_help);
+                write_text(state->output_descriptor, "\n");
+            }
             continue;
         }
         if (!run_plain_turn(state, line, error)) {

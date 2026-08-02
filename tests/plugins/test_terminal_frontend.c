@@ -35,6 +35,10 @@ static bool run_turn(const char *input, const struct telos_cancel *cancel,
         return emit_event(emit, emit_context, TELOS_FRONTEND_NOTICE,
                           "cleared", NULL, error);
     }
+    if (strcmp(input, "/login") == 0) {
+        return emit_event(emit, emit_context, TELOS_FRONTEND_NOTICE,
+                          "open the verification URL", NULL, error);
+    }
     if (strcmp(input, "delta") == 0 || strcmp(input, "delta\t") == 0) {
         return emit_event(emit, emit_context, TELOS_FRONTEND_TEXT_DELTA,
                           "implicit\ttext\n", NULL, error) &&
@@ -91,7 +95,7 @@ static ssize_t read_output(int descriptor, char *output, size_t capacity)
 int main(void)
 {
     static const char input[] =
-        "\001hello\n/help\n/clear\ndelta\t\n/quit\n";
+        "\001hello\n/help\n/login\n/clear\ndelta\t\n/quit\n";
     struct turn_fixture fixture = {0};
     const struct telos_frontend_session session = {
         .application = "Telos",
@@ -99,6 +103,7 @@ int main(void)
         .provider = "fixture",
         .model = "fixture-model",
         .working_directory = "/tmp",
+        .command_help = "/login /logout",
         .turn = run_turn,
         .turn_context = &fixture,
     };
@@ -128,15 +133,17 @@ int main(void)
     close(output_pipe[1]);
     assert(read_output(output_pipe[0], output, sizeof(output)) > 0);
     close(output_pipe[0]);
-    assert(fixture.turns == 3);
+    assert(fixture.turns == 4);
     assert(strstr(output, "Telos test") != NULL);
     assert(strstr(output, "Telos > hello world") != NULL);
     assert(strstr(output, "[tool] lookup") != NULL);
     assert(strstr(output, "[done] lookup") != NULL);
     assert(strstr(output, "[failed] ") != NULL);
     assert(strstr(output, "[notice] cleared") != NULL);
+    assert(strstr(output, "[notice] open the verification URL") != NULL);
     assert(strstr(output, "implicit\ttext") != NULL);
     assert(strstr(output, "/help /clear /quit") != NULL);
+    assert(strstr(output, "/login /logout") != NULL);
     assert(strchr(output, '\033') == NULL);
 
     {
