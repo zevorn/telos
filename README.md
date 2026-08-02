@@ -68,6 +68,15 @@ For automation, add `--json` to emit one bounded JSON event per line:
 build/tools/telos --json run 'your prompt'
 ```
 
+Process integrations can use strict JSONL RPC mode. Send a prompt request as
+`{"type":"prompt","message":"..."}` and terminate with
+`{"type":"quit"}`:
+
+```sh
+printf '%s\n' '{"type":"prompt","message":"hello"}' \
+    '{"type":"quit"}' | build/tools/telos --mode rpc chat
+```
+
 Inside the TUI, type `login` or `/login` to authenticate with an OpenAI
 ChatGPT account. API-key authentication remains available through
 `OPENAI_API_KEY`. See [the OpenAI login guide](docs/openai-login.md) for the

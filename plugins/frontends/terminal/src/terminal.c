@@ -1802,6 +1802,134 @@ static bool run_json(struct terminal_state *state, struct telos_error **error)
     }
 }
 
+enum rpc_request_kind {
+    RPC_REQUEST_PROMPT = 1,
+    RPC_REQUEST_COMMAND,
+    RPC_REQUEST_QUIT,
+};
+
+static bool parse_rpc_request(const char *line, char *payload,
+                              size_t payload_size,
+                              enum rpc_request_kind *kind,
+                              struct telos_error **error)
+{
+    struct telos_value *request;
+    const char *type;
+    const char *text;
+
+    if (line == NULL || payload == NULL || payload_size == 0 || kind == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "RPC request storage is invalid");
+        return false;
+    }
+    request = telos_value_parse_json(line, strlen(line), error);
+    if (request == NULL || telos_value_type(request) != TELOS_VALUE_OBJECT) {
+        telos_value_release(request);
+        if (error != NULL && *error == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                      "RPC request must be a JSON object");
+        }
+        return false;
+    }
+    type = telos_value_string(telos_value_get(request, "type"));
+    if (type == NULL) {
+        type = "prompt";
+    }
+    if (strcmp(type, "quit") == 0 || strcmp(type, "shutdown") == 0) {
+        *kind = RPC_REQUEST_QUIT;
+        payload[0] = '\0';
+        telos_value_release(request);
+        return true;
+    }
+    if (strcmp(type, "prompt") == 0) {
+        text = telos_value_string(telos_value_get(request, "message"));
+        if (text == NULL) {
+            text = telos_value_string(telos_value_get(request, "prompt"));
+        }
+        *kind = RPC_REQUEST_PROMPT;
+    } else if (strcmp(type, "command") == 0) {
+        text = telos_value_string(telos_value_get(request, "command"));
+        *kind = RPC_REQUEST_COMMAND;
+    } else {
+        telos_value_release(request);
+        set_error(error, TELOS_ERROR_DOMAIN_PROTOCOL, EPROTO,
+                  "RPC request type is unsupported");
+        return false;
+    }
+    if (text == NULL || text[0] == '\0' || strlen(text) >= payload_size) {
+        telos_value_release(request);
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "RPC request payload is missing or too large");
+        return false;
+    }
+    memcpy(payload, text, strlen(text) + 1);
+    telos_value_release(request);
+    return true;
+}
+
+static bool run_rpc(struct terminal_state *state, struct telos_error **error)
+{
+    struct json_context json = {
+        .output_descriptor = state->output_descriptor,
+    };
+    char line[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+    char payload[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+
+    if (state->session->initial_prompt != NULL &&
+        state->session->initial_prompt[0] != '\0' &&
+        !run_json_turn(state, state->session->initial_prompt, &json, error)) {
+        return false;
+    }
+    if (state->session->single_turn) {
+        return true;
+    }
+    while (true) {
+        enum rpc_request_kind kind;
+        ssize_t size = read_plain_line(state->input_descriptor, line,
+                                       state->maximum_input_bytes + 1U);
+
+        if (size < 0) {
+            set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
+                      "RPC input could not be read");
+            return false;
+        }
+        if (size == 0) {
+            return true;
+        }
+        if (!parse_rpc_request(line, payload, sizeof(payload), &kind, error)) {
+            return false;
+        }
+        if (kind == RPC_REQUEST_QUIT) {
+            return true;
+        }
+        if (kind == RPC_REQUEST_PROMPT) {
+            if (!run_json_turn(state, payload, &json, error)) {
+                return false;
+            }
+            continue;
+        }
+        {
+            bool handled = false;
+            bool exit_requested = false;
+
+            if (state->session->commands == NULL ||
+                !telos_command_registry_dispatch(
+                    state->session->commands, payload, NULL, json_emit, &json,
+                    &handled, &exit_requested, error)) {
+                return false;
+            }
+            if (!handled) {
+                if (!json_write_event(&json, "error", "Unknown RPC command",
+                                      NULL, error)) {
+                    return false;
+                }
+            } else if (exit_requested) {
+                return true;
+            }
+        }
+    }
+}
+
 bool telos_terminal_frontend_run(const telos_terminal_frontend_config *config,
                                  struct telos_error **error)
 {
@@ -1849,10 +1977,12 @@ bool telos_terminal_frontend_run(const telos_terminal_frontend_config *config,
     pthread_cond_init(&state->queue_changed, NULL);
     setlocale(LC_CTYPE, "");
 
-    result = config->json_output
-                 ? run_json(state, error)
+    result = config->rpc_mode
+                 ? run_rpc(state, error)
+                 : (config->json_output
+                        ? run_json(state, error)
                  : (interactive ? run_interactive(state, error)
-                                : run_plain(state, error));
+                                : run_plain(state, error)));
 
     pthread_mutex_lock(&state->queue_mutex);
     state->queue_shutdown = true;

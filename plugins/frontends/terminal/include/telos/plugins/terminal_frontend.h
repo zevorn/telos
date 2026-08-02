@@ -13,6 +13,7 @@ struct telos_terminal_frontend_config {
     size_t maximum_input_bytes;
     bool force_plain;
     bool json_output;
+    bool rpc_mode;
 };
 
 typedef struct telos_terminal_frontend_config telos_terminal_frontend_config;

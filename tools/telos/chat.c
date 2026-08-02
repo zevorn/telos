@@ -1942,6 +1942,7 @@ bool telos_chat_run(const struct telos_config *config,
                     const char *initial_prompt,
                     bool single_turn,
                     bool json_output,
+                    bool rpc_mode,
                     struct telos_error **error)
 {
     struct chat_session chat = {0};
@@ -1991,6 +1992,7 @@ bool telos_chat_run(const struct telos_config *config,
             .output_descriptor = STDOUT_FILENO,
             .force_plain = single_turn,
             .json_output = json_output,
+            .rpc_mode = rpc_mode,
         };
 
         result = telos_terminal_frontend_run(&frontend, error);

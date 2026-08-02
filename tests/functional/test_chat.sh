@@ -59,6 +59,31 @@ grep -Fq "Telos > hello from functional test" "$temporary/run.output"
 grep -Fq '{"event":"user","text":"hello"}' "$temporary/json.output"
 grep -Fq '{"event":"turn_completed"}' "$temporary/json.output"
 
+"$server" >"$temporary/rpc-port" &
+server_pid=$!
+attempt=0
+while ! test -s "$temporary/rpc-port"; do
+    attempt=$((attempt + 1))
+    if test "$attempt" -ge 100; then
+        echo "RPC Agent fixture server did not start" >&2
+        exit 1
+    fi
+    sleep 0.01
+done
+rpc_port=$(sed -n '1p' "$temporary/rpc-port")
+rpc_endpoint="http://127.0.0.1:$rpc_port/v1"
+printf '%s\n' \
+    '{"type":"prompt","message":"hello"}' \
+    '{"type":"quit"}' |
+    HOME="$temporary/home" \
+    TELOS_AGENT_MODEL=local-model \
+    TELOS_AGENT_ENDPOINT="$rpc_endpoint" \
+    "$telos" --mode rpc chat >"$temporary/rpc.output"
+wait "$server_pid"
+server_pid=
+grep -Fq '{"event":"text_delta","text":"hello from functional test"}' \
+    "$temporary/rpc.output"
+
 printf '/quit\n' | HOME="$temporary/home" \
     TELOS_AGENT_MODEL=local-model \
     TELOS_AGENT_ENDPOINT="$endpoint" \

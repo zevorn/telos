@@ -25,6 +25,7 @@
 
 struct cli_options {
     bool json;
+    bool rpc;
     bool yes;
     const char *state_directory;
     const char *builder;
@@ -50,6 +51,8 @@ static void usage(FILE *stream)
           "\n"
           "Options:\n"
           "  --json                 Emit machine-readable JSON\n"
+          "  --mode MODE            interactive, json, or rpc\n"
+          "  --rpc                  Use JSONL RPC input/output\n"
           "  --yes                  Approve an inspected installation plan\n"
           "  --state-dir PATH       Override state.directory\n"
           "  --provider ID          Override agent.provider\n"
@@ -556,7 +559,8 @@ static int agent_command(const struct cli_options *options,
     int result;
 
     if (telos_chat_run(config, home_directory, current_directory,
-                       initial_prompt, single_turn, options->json, &error)) {
+                       initial_prompt, single_turn, options->json, options->rpc,
+                       &error)) {
         return 0;
     }
     result = print_error(false, 3, error, "Agent terminal failed");
@@ -682,6 +686,28 @@ int main(int argc, char **argv)
         if (strcmp(argv[index], "--json") == 0) {
             options.json = true;
             index += 1;
+        } else if (strcmp(argv[index], "--rpc") == 0) {
+            options.json = true;
+            options.rpc = true;
+            index += 1;
+        } else if (index + 1 < argc &&
+                   strcmp(argv[index], "--mode") == 0) {
+            if (strcmp(argv[index + 1], "interactive") == 0) {
+                options.json = false;
+                options.rpc = false;
+            } else if (strcmp(argv[index + 1], "json") == 0) {
+                options.json = true;
+                options.rpc = false;
+            } else if (strcmp(argv[index + 1], "rpc") == 0) {
+                options.json = true;
+                options.rpc = true;
+            } else {
+                error = telos_error_create(
+                    TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                    "Agent mode must be interactive, json, or rpc", NULL);
+                break;
+            }
+            index += 2;
         } else if (strcmp(argv[index], "--yes") == 0) {
             options.yes = true;
             index += 1;

@@ -72,6 +72,11 @@ or `turn_completed`:
 build/tools/telos --json run 'reply with a short status'
 ```
 
+For process integrations, `--mode rpc` accepts one JSON request per line:
+`prompt` requests contain `message`, `command` requests contain a TUI command,
+and `quit` closes the session. Responses use the same event records as JSON
+mode.
+
 ## Use a local Responses server
 
 Telos accepts plain HTTP only for the loopback names `localhost`,
