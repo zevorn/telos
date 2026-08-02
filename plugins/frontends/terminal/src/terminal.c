@@ -78,6 +78,8 @@ struct terminal_state {
     size_t input_size;
     size_t input_cursor;
     char prior_prompt[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+    char completion_prefix[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
+    size_t completion_index;
     bool paste_active;
     bool exit_requested;
 
@@ -119,6 +121,7 @@ static bool enable_raw_mode(struct terminal_state *state,
                             struct telos_error **error);
 static bool editor_external(struct terminal_state *state,
                             struct telos_error **error);
+static void write_header(struct terminal_state *state);
 
 static void set_error(struct telos_error **error,
                       enum telos_error_domain domain,
@@ -1387,6 +1390,52 @@ static bool submit_editor(struct terminal_state *state,
     return start_turn(state, prompt, error);
 }
 
+static bool complete_command(struct terminal_state *state)
+{
+    const char *prefix;
+    size_t prefix_size;
+    size_t matches = 0;
+    size_t selected = 0;
+
+    if (state->session->commands == NULL || state->input_size < 1 ||
+        state->input[0] != '/' ||
+        memchr(state->input, ' ', state->input_size) != NULL ||
+        memchr(state->input, '\t', state->input_size) != NULL) {
+        return false;
+    }
+    prefix = state->input + 1;
+    prefix_size = state->input_size - 1;
+    if (prefix_size >= sizeof(state->completion_prefix) ||
+        strncmp(state->completion_prefix, state->input,
+                sizeof(state->completion_prefix)) != 0) {
+        copy_text(state->completion_prefix, sizeof(state->completion_prefix),
+                  state->input);
+        state->completion_index = 0;
+    }
+    for (size_t index = 0; index < state->session->commands->count; ++index) {
+        const char *name = state->session->commands->commands[index].name;
+
+        if (strncmp(name, prefix, prefix_size) == 0) {
+            if (matches == state->completion_index) {
+                selected = index;
+            }
+            ++matches;
+        }
+    }
+    if (matches == 0) {
+        return false;
+    }
+    state->completion_index =
+        (state->completion_index + 1) % matches;
+    state->input_size = (size_t)snprintf(state->input, sizeof(state->input),
+                                         "/%s",
+                                         state->session->commands
+                                             ->commands[selected]
+                                             .name);
+    state->input_cursor = state->input_size;
+    return true;
+}
+
 static bool key_sequence(const char *data, size_t size, const char *sequence)
 {
     size_t sequence_size = strlen(sequence);
@@ -1461,6 +1510,20 @@ static size_t handle_key(struct terminal_state *state, const char *data,
     if (key_sequence(data, size, "\033[3~")) {
         editor_delete(state);
         return 4;
+    }
+    if (data[0] == '\t') {
+        if (!complete_command(state)) {
+            write_all(state->output_descriptor, "\a", 1);
+        }
+        return 1;
+    }
+    if ((unsigned char)data[0] == 0x0cU) {
+        begin_frame(state);
+        clear_dynamic(state);
+        write_text(state->output_descriptor, "\033[2J\033[H");
+        write_header(state);
+        end_frame(state);
+        return 1;
     }
     if ((unsigned char)data[0] == 0x03U || data[0] == '\033') {
         if (state->worker_active && state->cancel != NULL) {
