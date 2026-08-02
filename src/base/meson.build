@@ -3,9 +3,11 @@ telos_base = static_library(
     [
         'cancel.c',
         'clock.c',
+        'command.c',
         'error.c',
         'event.c',
         'id.c',
+        'model.c',
         'trace.c',
         'value.c',
         'value_json.c',
