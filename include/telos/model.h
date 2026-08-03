@@ -23,6 +23,17 @@ struct telos_model_descriptor {
     const char *provider;
     const char *id;
     const char *name;
+    /*
+     * Parent model id when this entry is a selectable variant, or NULL for
+     * a family (top-level) model. A variant id keeps the form
+     * FAMILY/VARIANT, for example "gpt-5/sol".
+     */
+    const char *variant_of;
+    /*
+     * Default thinking level applied when a variant is selected, or NULL.
+     * One of off/minimal/low/medium/high/xhigh/max.
+     */
+    const char *reasoning;
     enum telos_model_api api;
     uint32_t capabilities;
     size_t context_window;

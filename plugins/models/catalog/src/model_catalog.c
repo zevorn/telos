@@ -14,6 +14,39 @@ static const struct telos_model_descriptor models[] = {
     },
     {
         .provider = "openai",
+        .id = "gpt-5/sol",
+        .name = "GPT-5 Sol",
+        .variant_of = "gpt-5",
+        .reasoning = "high",
+        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
+        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+    },
+    {
+        .provider = "openai",
+        .id = "gpt-5/terra",
+        .name = "GPT-5 Terra",
+        .variant_of = "gpt-5",
+        .reasoning = "medium",
+        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
+        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+    },
+    {
+        .provider = "openai",
+        .id = "gpt-5/luna",
+        .name = "GPT-5 Luna",
+        .variant_of = "gpt-5",
+        .reasoning = "low",
+        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
+        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+    },
+    {
+        .provider = "openai",
         .id = "gpt-5-mini",
         .name = "GPT-5 Mini",
         .api = TELOS_MODEL_API_OPENAI_RESPONSES,

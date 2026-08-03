@@ -28,6 +28,12 @@ int main(void)
     assert(error == NULL);
     assert(count >= 8);
     assert(telos_model_catalog_find(&catalog, "openai", "gpt-5") != NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5/sol") !=
+           NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5/terra") !=
+           NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5/luna") !=
+           NULL);
     assert(telos_model_catalog_find(&catalog, "deepseek",
                                     "deepseek-reasoner") != NULL);
     assert(telos_model_catalog_find(&catalog, "zai", "glm-4.7") != NULL);
