@@ -876,8 +876,10 @@ static void write_status_line(struct terminal_state *state, const char *symbol,
 
     for (size_t index = 0; index <= size; ++index) {
         if (label[index] == '\n' || index == size) {
-            write_status_line_segment(state, symbol, label + start,
-                                      index - start, color);
+            if (index > start) {
+                write_status_line_segment(state, symbol, label + start,
+                                          index - start, color);
+            }
             start = index + 1;
         }
     }

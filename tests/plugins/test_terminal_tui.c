@@ -133,7 +133,7 @@ static bool run_turn(const char *input, const struct telos_cancel *cancel,
                emit_event(emit, emit_context, TELOS_FRONTEND_TOOL_FAILED,
                           NULL, NULL, error) &&
                emit_event(emit, emit_context, TELOS_FRONTEND_NOTICE,
-                          "notice from fixture\nsubsequent line", NULL,
+                          "notice from fixture\nsubsequent line\n", NULL,
                           error) &&
                emit_event(emit, emit_context,
                           (enum telos_frontend_event_kind)999, NULL, NULL,
@@ -407,6 +407,7 @@ int main(void)
     assert(strstr(output, "notice from fixture") != NULL);
     assert(strstr(output, "subsequent line") != NULL);
     assert(strstr(output, "fixturesubsequent") == NULL);
+    assert(strstr(output, "• \r\n") == NULL);
     assert(strstr(output, "second turn") != NULL);
     memset(output, 0, sizeof(output));
     assert(write(master, "\033[A\033[Bcancel\r",
