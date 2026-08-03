@@ -1450,9 +1450,16 @@ static bool append_model_list(const struct telos_model_descriptor *model,
         strcmp(list->provider_filter, model->provider) != 0) {
         return true;
     }
-    written = snprintf(list->text + list->used,
-                       sizeof(list->text) - list->used, "%s/%s\n",
-                       model->provider, model->id);
+    if (model->reasoning != NULL) {
+        written = snprintf(list->text + list->used,
+                           sizeof(list->text) - list->used, "%s/%s "
+                                                           "(reasoning=%s)\n",
+                           model->provider, model->id, model->reasoning);
+    } else {
+        written = snprintf(list->text + list->used,
+                           sizeof(list->text) - list->used, "%s/%s\n",
+                           model->provider, model->id);
+    }
     if (written < 0 || (size_t)written >= sizeof(list->text) - list->used) {
         return false;
     }
@@ -2267,15 +2274,22 @@ static bool model_command(const char *arguments,
         return false;
     }
     chat->selected_model = model;
-    chat->model = model->id;
+    chat->model = model->variant_of == NULL ? model->id
+                                            : model->variant_of;
     chat->configured_provider = model->provider;
     if ((model->capabilities & TELOS_MODEL_CAPABILITY_REASONING) == 0) {
         if (!set_thinking_options(chat, "off", error)) {
             return false;
         }
         memcpy(chat->thinking_level, "off", sizeof("off"));
-    } else if (!set_thinking_options(chat, chat->thinking_level, error)) {
-        return false;
+    } else {
+        const char *level = model->reasoning == NULL ? chat->thinking_level
+                                                     : model->reasoning;
+
+        if (!set_thinking_options(chat, level, error)) {
+            return false;
+        }
+        memcpy(chat->thinking_level, level, strlen(level) + 1);
     }
     if (!ensure_authentication(chat, model->provider, error) ||
         !create_provider(chat, error)) {
