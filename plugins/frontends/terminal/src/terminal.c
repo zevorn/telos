@@ -73,6 +73,14 @@ struct terminal_state {
     char active_prompt[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
     char queued_prompt[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
     bool prompt_queued;
+    /*
+     * When the worker runs a blocking command such as /login instead of an
+     * agent turn, this holds the command line and flags the worker dispatch
+     * path.
+     */
+    char worker_command_line[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES +
+                             1U];
+    bool worker_command;
 
     char input[TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U];
     size_t input_size;
@@ -1006,9 +1014,30 @@ static void *run_turn(void *context)
 {
     struct terminal_state *state = context;
     struct telos_error *error = NULL;
-    bool result = state->session->turn(
-        state->active_prompt, state->cancel, queue_frontend_event, state,
-        state->session->turn_context, &error);
+    bool result;
+
+    if (state->worker_command) {
+        bool handled = false;
+        bool exit_requested = false;
+
+        state->worker_command = false;
+        result = telos_command_registry_dispatch(
+            state->session->commands, state->worker_command_line,
+            state->cancel, queue_frontend_event, state, &handled,
+            &exit_requested, &error);
+        if (exit_requested) {
+            state->exit_requested = true;
+            queue_push(state, &(const struct queued_event){
+                .kind = QUEUED_TURN_COMPLETED,
+            });
+            telos_error_release(error);
+            return NULL;
+        }
+    } else {
+        result = state->session->turn(
+            state->active_prompt, state->cancel, queue_frontend_event, state,
+            state->session->turn_context, &error);
+    }
 
     if (!result) {
         struct queued_event failed = {
@@ -1172,9 +1201,27 @@ static bool start_turn(struct terminal_state *state, const char *prompt,
         return true;
     }
     if (state->session->commands != NULL && prompt[0] == '/') {
-        if (!telos_command_registry_dispatch(
-                state->session->commands, prompt, NULL, queue_frontend_event,
-                state, &handled, &exit_requested, &command_error)) {
+        const char *slash = prompt + 1;
+        const bool blocking_command =
+            (strncmp(slash, "login", sizeof("login") - 1) == 0 &&
+             (slash[sizeof("login") - 1] == '\0' ||
+              slash[sizeof("login") - 1] == ' ')) ||
+            (strncmp(slash, "logout", sizeof("logout") - 1) == 0 &&
+             (slash[sizeof("logout") - 1] == '\0' ||
+              slash[sizeof("logout") - 1] == ' ')) ||
+            (strncmp(slash, "login-status", sizeof("login-status") - 1) ==
+                 0 &&
+             (slash[sizeof("login-status") - 1] == '\0' ||
+              slash[sizeof("login-status") - 1] == ' '));
+
+        if (blocking_command) {
+            copy_text(state->worker_command_line,
+                      sizeof(state->worker_command_line), prompt);
+            state->worker_command = true;
+        } else if (!telos_command_registry_dispatch(
+                       state->session->commands, prompt, NULL,
+                       queue_frontend_event, state, &handled,
+                       &exit_requested, &command_error)) {
             if (command_error != NULL &&
                 telos_error_code(command_error) == ENOENT) {
                 char message[TELOS_COMMAND_ARGUMENT_SIZE];
@@ -1202,7 +1249,7 @@ static bool start_turn(struct terminal_state *state, const char *prompt,
             telos_error_release(command_error);
             return false;
         }
-        if (handled) {
+        if (handled && !blocking_command) {
             state->exit_requested = state->exit_requested || exit_requested;
             return true;
         }
