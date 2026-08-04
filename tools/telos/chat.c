@@ -1975,6 +1975,10 @@ static bool observe_agent(const struct telos_agent_event *event,
             return emit_frontend(observer, TELOS_FRONTEND_TEXT_DELTA,
                                  provider->delta, NULL, error);
         }
+        if (provider->kind == TELOS_PROVIDER_REASONING_ITEM) {
+            return emit_frontend(observer, TELOS_FRONTEND_THINKING_DELTA,
+                                 provider->delta, NULL, error);
+        }
         return true;
     }
     if (event->kind == TELOS_AGENT_TOOL_STARTED) {

@@ -34,6 +34,8 @@ enum telos_frontend_event_kind {
     TELOS_FRONTEND_TOOL_FAILED,
     TELOS_FRONTEND_NOTICE,
     TELOS_FRONTEND_CLIPBOARD,
+    TELOS_FRONTEND_THINKING_DELTA,
+    TELOS_FRONTEND_THINKING_COMPLETED,
 };
 
 struct telos_frontend_event {

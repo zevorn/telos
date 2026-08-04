@@ -142,6 +142,22 @@ struct tui_state {
     bool response_active;
     bool response_first_line;
     bool markdown_code_block;
+    enum tui_turn_phase {
+        TUI_PHASE_IDLE = 0,
+        TUI_PHASE_WAITING,
+        TUI_PHASE_THINKING,
+        TUI_PHASE_RESPONSE,
+        TUI_PHASE_TOOLS,
+    } turn_phase;
+    int64_t turn_start_ms;
+    int64_t thinking_start_ms;
+    int64_t response_start_ms;
+    int64_t tools_start_ms;
+    int64_t tools_total_ms;
+    bool turn_summary_written;
+    char thinking_buffer[4096];
+    size_t thinking_size;
+    bool thinking_collapsed;
     struct tui_tool_entry tools[TUI_TOOL_CAPACITY];
     size_t tool_count;
     bool tools_collapsed;
@@ -1542,6 +1558,8 @@ static bool render_dynamic(struct tui_state *state)
      */
     size_t response_rows =
         (state->stream_size > 0 || state->worker_active) ? 1 : 0;
+    size_t thinking_rows =
+        (state->thinking_size > 0 && !state->thinking_collapsed) ? 1 : 0;
     size_t tool_rows = 0;
     size_t completion_rows = 0;
     size_t model_selector_rows = 0;
@@ -1633,8 +1651,8 @@ static bool render_dynamic(struct tui_state *state)
 
         completion_rows = count == 0 ? 0 : visible + 1;
     }
-    active_rows = response_rows + tool_rows + model_selector_rows +
-                  completion_rows + editor_rows + 3;
+    active_rows = thinking_rows + response_rows + tool_rows +
+                  model_selector_rows + completion_rows + editor_rows + 3;
     history_limit = terminal_rows(state) > active_rows
                         ? terminal_rows(state) - active_rows
                         : 0;
@@ -1646,6 +1664,46 @@ static bool render_dynamic(struct tui_state *state)
     if (!render_history(state, columns, history_limit, &history_rows)) {
         end_frame(state);
         return false;
+    }
+    if (state->thinking_size > 0 && !state->thinking_collapsed) {
+        char line[TUI_RENDER_LINE_SIZE] = {0};
+        size_t used = 0;
+
+        if (state->color) {
+            append_text(line, sizeof(line), &used, "\033[3;38;5;245m");
+        }
+        append_text(line, sizeof(line), &used, "Thinking · ");
+        if (state->color) {
+            append_text(line, sizeof(line), &used, "\033[0m");
+        }
+        append_bytes(line, sizeof(line), &used, state->thinking_buffer,
+                     bytes_for_width(state->thinking_buffer,
+                                     state->thinking_size, columns - 12));
+        if (!write_render_line(state, line, false)) {
+            end_frame(state);
+            return false;
+        }
+    } else if (state->thinking_size > 0 && state->thinking_collapsed) {
+        char line[TUI_RENDER_LINE_SIZE] = {0};
+        size_t used = 0;
+
+        if (state->color) {
+            append_text(line, sizeof(line), &used, "\033[38;5;245m");
+        }
+        append_text(line, sizeof(line), &used, "••• thinking (");
+        {
+            char count[32];
+
+            if (snprintf(count, sizeof(count), "%zu chars", 
+                         state->thinking_size) < (int)sizeof(count)) {
+                append_text(line, sizeof(line), &used, count);
+            }
+        }
+        append_text(line, sizeof(line), &used, ") · Ctrl+T expand");
+        if (!write_render_line(state, line, false)) {
+            end_frame(state);
+            return false;
+        }
     }
     if (state->stream_size > 0) {
         if (state->color) {
@@ -1748,11 +1806,12 @@ static bool render_dynamic(struct tui_state *state)
         end_frame(state);
         return false;
     }
-    total_rows = history_rows + response_rows + tool_rows +
+    total_rows = history_rows + thinking_rows + response_rows + tool_rows +
                  model_selector_rows + completion_rows + editor_rows + 3;
 
     state->rendered_rows = total_rows;
-    state->rendered_cursor_row = history_rows + response_rows + tool_rows +
+    state->rendered_cursor_row = history_rows + thinking_rows +
+                                 response_rows + tool_rows +
                                  model_selector_rows + completion_rows + 1 +
                                  (metrics.cursor_row - first_row);
     write_text(state->output_descriptor, "\r");
@@ -3017,6 +3076,16 @@ static bool start_turn(struct tui_state *state, const char *prompt,
     state->markdown_code_block = false;
     state->stream_size = 0;
     state->tool_count = 0;
+    state->turn_phase = TUI_PHASE_WAITING;
+    state->turn_start_ms = monotonic_milliseconds();
+    state->thinking_start_ms = 0;
+    state->response_start_ms = 0;
+    state->tools_start_ms = 0;
+    state->tools_total_ms = 0;
+    state->turn_summary_written = false;
+    state->thinking_size = 0;
+    state->thinking_buffer[0] = '\0';
+    state->thinking_collapsed = false;
     state->tools_collapsed = false;
     state->cancel = telos_cancel_create();
     if (state->cancel == NULL) {
@@ -3105,25 +3174,67 @@ static void handle_frontend_event(struct tui_state *state,
     switch (event->frontend_kind) {
     case TELOS_FRONTEND_RESPONSE_STARTED:
         state->response_active = true;
+        if (state->turn_phase == TUI_PHASE_WAITING) {
+            state->turn_phase = TUI_PHASE_THINKING;
+            state->thinking_start_ms = monotonic_milliseconds();
+        }
         break;
     case TELOS_FRONTEND_TEXT_DELTA:
         state->response_active = true;
+        if (state->turn_phase != TUI_PHASE_RESPONSE) {
+            if (state->turn_phase == TUI_PHASE_THINKING) {
+                state->response_start_ms = monotonic_milliseconds();
+            }
+            state->turn_phase = TUI_PHASE_RESPONSE;
+        }
         stream_text(state, event->text);
         break;
     case TELOS_FRONTEND_TOOL_STARTED:
         flush_stream(state, true);
+        if (state->turn_phase != TUI_PHASE_TOOLS) {
+            state->turn_phase = TUI_PHASE_TOOLS;
+            state->tools_start_ms = monotonic_milliseconds();
+        }
         record_tool_event(state, TUI_TOOL_RUNNING, event->name,
                           event->text);
         break;
     case TELOS_FRONTEND_TOOL_COMPLETED:
         flush_stream(state, true);
+        if (state->turn_phase == TUI_PHASE_TOOLS) {
+            state->tools_total_ms +=
+                monotonic_milliseconds() - state->tools_start_ms;
+        }
         record_tool_event(state, TUI_TOOL_COMPLETED, event->name,
                           event->text);
         break;
     case TELOS_FRONTEND_TOOL_FAILED:
         flush_stream(state, true);
+        if (state->turn_phase == TUI_PHASE_TOOLS) {
+            state->tools_total_ms +=
+                monotonic_milliseconds() - state->tools_start_ms;
+        }
         record_tool_event(state, TUI_TOOL_FAILED, event->name,
                           event->text);
+        break;
+    case TELOS_FRONTEND_THINKING_DELTA:
+        if (event->text[0] != '\0') {
+            size_t room = sizeof(state->thinking_buffer) -
+                          state->thinking_size - 1;
+            size_t copy = strlen(event->text);
+
+            if (copy > room) {
+                copy = room;
+            }
+            if (copy > 0) {
+                memcpy(state->thinking_buffer + state->thinking_size,
+                       event->text, copy);
+                state->thinking_size += copy;
+                state->thinking_buffer[state->thinking_size] = '\0';
+            }
+        }
+        break;
+    case TELOS_FRONTEND_THINKING_COMPLETED:
+        state->thinking_collapsed = true;
         break;
     case TELOS_FRONTEND_NOTICE:
         flush_stream(state, true);
@@ -3156,6 +3267,64 @@ static void handle_frontend_event(struct tui_state *state,
     }
 }
 
+static void write_turn_summary(struct tui_state *state)
+{
+    static const char *const spinners[] = {"⠋", "⠙", "⠹", "⠸",
+                                            "⠼", "⠴", "⠦", "⠧"};
+    int64_t now = monotonic_milliseconds();
+    int64_t wait_ms = 0;
+    int64_t thinking_ms = 0;
+    int64_t response_ms = 0;
+    int64_t tools_ms = state->tools_total_ms;
+    int64_t total_ms;
+    struct tm clock_tm;
+    time_t clock_seconds;
+    char completed[32];
+    char summary[TUI_RENDER_LINE_SIZE];
+
+    (void)spinners;
+
+    if (state->turn_start_ms > 0) {
+        wait_ms = state->thinking_start_ms > 0
+                      ? state->thinking_start_ms - state->turn_start_ms
+                      : now - state->turn_start_ms;
+    }
+    if (state->thinking_start_ms > 0 && state->response_start_ms > 0) {
+        thinking_ms = state->response_start_ms - state->thinking_start_ms;
+    }
+    if (state->response_start_ms > 0) {
+        response_ms = state->turn_phase == TUI_PHASE_TOOLS
+                          ? state->tools_start_ms - state->response_start_ms
+                          : now - state->response_start_ms;
+    }
+    if (response_ms < 0) {
+        response_ms = 0;
+    }
+    if (wait_ms < 0) {
+        wait_ms = 0;
+    }
+    if (thinking_ms < 0) {
+        thinking_ms = 0;
+    }
+    total_ms = wait_ms + thinking_ms + response_ms + tools_ms;
+
+    clock_seconds = time(NULL);
+    if (localtime_r(&clock_seconds, &clock_tm) == NULL ||
+        strftime(completed, sizeof(completed), "%H:%M:%S",
+                 &clock_tm) == 0) {
+        copy_text(completed, sizeof(completed), "--:--:--");
+    }
+    if (snprintf(summary, sizeof(summary),
+                 "Model wait %.1fs · Thinking %.1fs · Response %.1fs · "
+                 "Tools %.1fs · Total %.1fs · Completed %s",
+                 wait_ms / 1000.0, thinking_ms / 1000.0,
+                 response_ms / 1000.0, tools_ms / 1000.0,
+                 total_ms / 1000.0, completed) < (int)sizeof(summary)) {
+        history_append_text(state, TUI_HISTORY_STATUS, "•", summary);
+    }
+    state->turn_phase = TUI_PHASE_IDLE;
+}
+
 static bool drain_events(struct tui_state *state,
                          bool *did_work,
                          struct telos_error **error)
@@ -3182,6 +3351,10 @@ static bool drain_events(struct tui_state *state,
             if (state->response_active) {
                 history_append_line(state, TUI_HISTORY_PLAIN, NULL, "",
                                     0, false);
+            }
+            if (!state->turn_summary_written) {
+                write_turn_summary(state);
+                state->turn_summary_written = true;
             }
             if (pthread_join(state->worker, NULL) != 0) {
                 telos_error_set(error, TELOS_ERROR_DOMAIN_STATE, EIO,
@@ -3707,6 +3880,10 @@ static size_t handle_key(struct tui_state *state, const char *data,
         state->tools_collapsed = !state->tools_collapsed;
         return 1;
     }
+    if ((unsigned char)data[0] == 0x14U && state->thinking_size > 0) {
+        state->thinking_collapsed = !state->thinking_collapsed;
+        return 1;
+    }
     if (key_sequence(data, size, "\033[3~")) {
         editor_delete(state);
         return 4;
@@ -4142,6 +4319,10 @@ static bool plain_emit(const struct telos_frontend_event *event,
         write_text(plain->output_descriptor, "\n[clipboard] ");
         plain_write_sanitized(plain->output_descriptor, event->text);
         write_text(plain->output_descriptor, "\n");
+    } else if (event->kind == TELOS_FRONTEND_THINKING_DELTA) {
+        write_text(plain->output_descriptor, "\n[thinking] ");
+        plain_write_sanitized(plain->output_descriptor, event->text);
+        write_text(plain->output_descriptor, "\n");
     }
     return true;
 }
@@ -4357,6 +4538,10 @@ static const char *json_event_name(enum telos_frontend_event_kind kind)
         return "notice";
     case TELOS_FRONTEND_CLIPBOARD:
         return "clipboard";
+    case TELOS_FRONTEND_THINKING_DELTA:
+        return "thinking_delta";
+    case TELOS_FRONTEND_THINKING_COMPLETED:
+        return "thinking_completed";
     default:
         return NULL;
     }
