@@ -22,6 +22,7 @@ struct telos_agent_event {
     const struct telos_provider_event *provider_event;
     const char *tool_call_id;
     const char *tool_name;
+    const struct telos_value *tool_arguments;
     const struct telos_value *tool_result;
     const struct telos_error *tool_error;
 };
@@ -30,6 +31,9 @@ typedef bool (*telos_agent_observe_fn)(const struct telos_agent_event *event,
                                        void *context,
                                        struct telos_error **error);
 
+typedef struct telos_value *(*telos_agent_steer_fn)(
+    void *context, const char *assistant_text, struct telos_error **error);
+
 struct telos_agent_options {
     const struct telos_registry_generation *registry_generation;
     struct telos_capability_broker *capability_broker;
@@ -37,6 +41,8 @@ struct telos_agent_options {
     void *provider_context;
     telos_agent_observe_fn observe;
     void *observe_context;
+    telos_agent_steer_fn steer;
+    void *steer_context;
     size_t maximum_provider_rounds;
     size_t maximum_response_bytes;
 };

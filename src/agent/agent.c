@@ -288,6 +288,7 @@ static bool run_tools(const struct telos_agent_options *options,
                 .provider_round = provider_round,
                 .tool_call_id = collector->calls[index].call_id,
                 .tool_name = collector->calls[index].name,
+                .tool_arguments = collector->calls[index].arguments,
             };
 
             if (!options->observe(&event, options->observe_context, error)) {
