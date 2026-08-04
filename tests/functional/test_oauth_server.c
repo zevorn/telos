@@ -168,7 +168,7 @@ int main(void)
                         "POST /oauth/token HTTP/",
                         "code_verifier=verifier-functional",
                         "application/json", token) ||
-        !handle_request(listener, "\"stream\":true",
+        !handle_request(listener, "\"model\":\"gpt-5.6-luna\"",
                         "POST /v1/responses HTTP/",
                         "chatgpt-account-id: acct-functional",
                         "text/event-stream", response)) {

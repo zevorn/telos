@@ -59,6 +59,30 @@ grep -Fq "Telos > hello from functional test" "$temporary/run.output"
 grep -Fq '{"event":"user","text":"hello"}' "$temporary/json.output"
 grep -Fq '{"event":"turn_completed"}' "$temporary/json.output"
 
+saved_session=$(find "$temporary/home/.telos/sessions" -type f \
+    -name '*.jsonl' -size +0c | sort | sed -n '1p')
+test -n "$saved_session"
+printf '/resume %s\n/session\n/quit\n' "$saved_session" |
+    HOME="$temporary/home" TELOS_AGENT_MODEL=unconfigured \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/resume-existing.output"
+grep -Fq "session resumed" "$temporary/resume-existing.output"
+grep -Fq "$saved_session" "$temporary/resume-existing.output"
+grep -Fq "2 messages" "$temporary/resume-existing.output"
+printf '/resume %s\n/session\n/rename renamed-session\n/session\n/quit\n' \
+    "$saved_session" |
+    HOME="$temporary/home" TELOS_AGENT_MODEL=unconfigured \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/session-name.output"
+grep -Fq "session hello" "$temporary/session-name.output"
+grep -Fq "session renamed-session" "$temporary/session-name.output"
+grep -Fq '"type":"session.name"' "$saved_session"
+printf '/resume %s\n/session\n/quit\n' "$saved_session" |
+    HOME="$temporary/home" TELOS_AGENT_MODEL=unconfigured \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/session-name-persisted.output"
+grep -Fq "session renamed-session" "$temporary/session-name-persisted.output"
+
 "$server" >"$temporary/rpc-port" &
 server_pid=$!
 attempt=0
@@ -135,9 +159,15 @@ printf '[{"role":"user","content":"saved"}]\n' \
         '/resume' \
         '/compact' \
         '/scoped-models' \
-        '/model openai/gpt-5' \
+        '/model openai/gpt-5/luna' \
         '/thinking high' \
         '/thinking' \
+        '/status' \
+        '/status model thinking' \
+        '/setting status all' \
+        '/setting thinking low' \
+        '/setting' \
+        '/setting model openai/gpt-5.4' \
         '/model custom-local-model' \
         '/settings' \
         '/reload' \
@@ -162,10 +192,41 @@ grep -Fq "session checkpoint resumed" "$temporary/commands.output"
 grep -Fq "conversation compacted" "$temporary/commands.output"
 grep -Fq "provider=openai model=custom-local-model thinking=off endpoint=http://127.0.0.1:1/v1" \
     "$temporary/commands.output"
-grep -Fq "Model set to openai/gpt-5" "$temporary/commands.output"
+grep -Fq "Model set to openai/gpt-5.6-luna" "$temporary/commands.output"
 grep -Fq "Thinking level set to high" "$temporary/commands.output"
 grep -Fq "thinking=high" "$temporary/commands.output"
+grep -Fq "status=context" \
+    "$temporary/commands.output"
+grep -Fq "Status fields set to model,thinking" "$temporary/commands.output"
+grep -Fq "Status fields set to model,thinking,path,branch,context" \
+    "$temporary/commands.output"
+grep -Fq "Thinking level set to low" "$temporary/commands.output"
+grep -Fq "provider=openai model=gpt-5.6-luna thinking=low" \
+    "$temporary/commands.output"
+grep -Fq "Model set to openai/gpt-5.4" "$temporary/commands.output"
 grep -Fq "Model set to openai/custom-local-model" "$temporary/commands.output"
+grep -Fq 'model = "openai/custom-local-model"' \
+    "$temporary/home/.telos/config.toml"
+grep -Fq 'thinking = "off"' "$temporary/home/.telos/config.toml"
+grep -Fq 'status = "model,thinking,path,branch,context"' \
+    "$temporary/home/.telos/config.toml"
+printf '/settings\n/quit\n' | HOME="$temporary/home" \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/persisted.output"
+grep -Fq "provider=openai model=custom-local-model thinking=off" \
+    "$temporary/persisted.output"
+
+mkdir -p "$temporary/thinking-home"
+printf '/model openai/gpt-5.5\n/thinking max\n/quit\n' |
+    HOME="$temporary/thinking-home" TELOS_AGENT_MODEL=unconfigured \
+    TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/thinking.output"
+grep -Fq 'thinking = "max"' \
+    "$temporary/thinking-home/.telos/config.toml"
+printf '/thinking\n/quit\n' |
+    HOME="$temporary/thinking-home" TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
+    "$telos" chat >"$temporary/thinking-persisted.output"
+grep -Fq "thinking=max" "$temporary/thinking-persisted.output"
 grep -Fq "runtime guidance reloaded" \
     "$temporary/commands.output"
 grep -Fq "Ctrl+J or Alt+Enter" "$temporary/commands.output"
@@ -176,12 +237,12 @@ grep -Fq "session exported" "$temporary/commands.output"
 grep -Fq "session resumed" "$temporary/commands.output"
 test -s "$temporary/export.json"
 test -s "$temporary/share.json"
-printf '/model openai/gpt-5\n/model\n/quit\n' | \
+printf '/model openai/gpt-5.5\n/model\n/quit\n' | \
     HOME="$temporary/home" TELOS_AGENT_MODEL=unconfigured \
     TELOS_AGENT_ENDPOINT=http://127.0.0.1:1/v1 \
     "$telos" chat >"$temporary/filtered.output"
-grep -Fq "Model set to openai/gpt-5" "$temporary/filtered.output"
-grep -Fq "openai/gpt-5" "$temporary/filtered.output"
+grep -Fq "Model set to openai/gpt-5.5" "$temporary/filtered.output"
+grep -Fq "openai/gpt-5.5" "$temporary/filtered.output"
 if grep -Fq "deepseek/" "$temporary/filtered.output"; then
     echo "current provider model list leaked another provider" >&2
     exit 1
@@ -192,6 +253,7 @@ printf '/session\n/quit\n' | HOME="$temporary/home" \
     "$telos" --continue chat >"$temporary/continue.output"
 grep -Fq "session " "$temporary/continue.output"
 grep -Fq "messages" "$temporary/continue.output"
+grep -Fq "1 messages" "$temporary/continue.output"
 session_file=$(find "$temporary/home/.telos/sessions" -type f \
     -name '*.jsonl' | sed -n '1p')
 test -n "$session_file"

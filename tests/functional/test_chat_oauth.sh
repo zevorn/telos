@@ -33,7 +33,7 @@ port=$(sed -n '1p' "$temporary/port")
 base="http://127.0.0.1:$port"
 printf '/login\nhello\n/login status\n/logout\n/quit\n' |
     HOME="$temporary/home" \
-    TELOS_AGENT_MODEL=local-model \
+    TELOS_AGENT_MODEL=openai/gpt-5/luna \
     TELOS_AGENT_ENDPOINT="$base/v1" \
     TELOS_OPENAI_AUTH_ENDPOINT="$base" \
     "$telos" chat >"$temporary/chat.output"
