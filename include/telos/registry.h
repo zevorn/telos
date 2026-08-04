@@ -21,6 +21,7 @@ enum telos_extension_kind {
     TELOS_EXTENSION_PROMPT,
     TELOS_EXTENSION_AUTHENTICATION,
     TELOS_EXTENSION_MODEL_CATALOG,
+    TELOS_EXTENSION_TUI_PLUGIN,
 };
 
 struct telos_extension_descriptor {
