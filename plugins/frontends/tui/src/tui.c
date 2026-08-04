@@ -206,6 +206,7 @@ static bool enable_raw_mode(struct tui_state *state,
 static bool editor_external(struct tui_state *state,
                             struct telos_error **error);
 static void write_header(struct tui_state *state);
+static bool refresh_footer(struct tui_state *state);
 
 static bool write_all(int descriptor, const char *data, size_t size)
 {
@@ -1343,8 +1344,8 @@ static bool render_tool_panel(struct tui_state *state, size_t columns,
     return true;
 }
 
-static bool write_footer(struct tui_state *state, size_t columns,
-                         bool final)
+static bool render_footer_content(struct tui_state *state, size_t columns,
+                                   char *footer, size_t footer_size)
 {
     static const char *const spinners[] = {"⠋", "⠙", "⠹", "⠸",
                                             "⠼", "⠴", "⠦", "⠧"};
@@ -1353,7 +1354,6 @@ static bool write_footer(struct tui_state *state, size_t columns,
     char thinking[64];
     char branch[128];
     char context[160];
-    char footer[TUI_RENDER_LINE_SIZE] = {0};
     char visible[TUI_RENDER_LINE_SIZE] = {0};
     size_t visible_used = 0;
     size_t footer_used = 0;
@@ -1474,15 +1474,58 @@ static bool write_footer(struct tui_state *state, size_t columns,
             if (segment_size == 0) {
                 continue;
             }
-            if (footer_used + 3 + segment_size < sizeof(footer)) {
-                append_text(footer, sizeof(footer), &footer_used, " · ");
-                append_bytes(footer, sizeof(footer), &footer_used, segment,
+            if (footer_used + 3 + segment_size < footer_size) {
+                append_text(footer, footer_size, &footer_used, " · ");
+                append_bytes(footer, footer_size, &footer_used, segment,
                              segment_size);
             }
         }
     }
 
+    return true;
+}
+
+static bool write_footer(struct tui_state *state, size_t columns,
+                         bool final)
+{
+    char footer[TUI_RENDER_LINE_SIZE] = {0};
+
+    if (!render_footer_content(state, columns, footer, sizeof(footer))) {
+        return false;
+    }
     return write_render_line(state, footer, final);
+}
+
+/*
+ * Redraw only the footer line in place, used to animate the spinner
+ * between frames so the terminal scrollback is not polluted with
+ * full-frame redraws.  The cursor is assumed to sit at the editor
+ * cursor position after render_dynamic().
+ */
+static bool refresh_footer(struct tui_state *state)
+{
+    char footer[TUI_RENDER_LINE_SIZE] = {0};
+    char sequence[64];
+    size_t columns = terminal_columns(state);
+    int size;
+
+    if (state->rendered_rows == 0 ||
+        state->rendered_cursor_row >= state->rendered_rows - 1) {
+        return true;
+    }
+    if (!render_footer_content(state, columns, footer, sizeof(footer))) {
+        return false;
+    }
+    size = snprintf(sequence, sizeof(sequence), "\033[%zuB",
+                    state->rendered_rows - 1 - state->rendered_cursor_row);
+    write_all(state->output_descriptor, sequence, (size_t)size);
+    write_text(state->output_descriptor, "\r\033[K");
+    write_all(state->output_descriptor, footer, strlen(footer));
+    write_text(state->output_descriptor, "\033[0m");
+    size = snprintf(sequence, sizeof(sequence), "\033[%zuA",
+                    state->rendered_rows - 1 - state->rendered_cursor_row);
+    write_all(state->output_descriptor, sequence, (size_t)size);
+    return true;
 }
 
 static bool render_dynamic(struct tui_state *state)
@@ -3114,9 +3157,11 @@ static void handle_frontend_event(struct tui_state *state,
 }
 
 static bool drain_events(struct tui_state *state,
+                         bool *did_work,
                          struct telos_error **error)
 {
     struct queued_event event;
+    bool processed = false;
 
     /*
      * Process queued events without rendering directly.  All visual
@@ -3125,6 +3170,7 @@ static bool drain_events(struct tui_state *state,
      * stale content on screen.
      */
     while (queue_pop(state, &event)) {
+        processed = true;
         if (event.kind == QUEUED_FRONTEND_EVENT) {
             handle_frontend_event(state, &event);
         } else if (event.kind == QUEUED_TURN_ERROR) {
@@ -3159,6 +3205,9 @@ static bool drain_events(struct tui_state *state,
                 }
             }
         }
+    }
+    if (did_work != NULL) {
+        *did_work = processed;
     }
     return true;
 }
@@ -3586,6 +3635,7 @@ static size_t handle_key(struct tui_state *state, const char *data,
         history_scroll_newer(state);
         return 4;
     }
+
     if (key_sequence(data, size, "\033[200~")) {
         state->paste_active = true;
         return 6;
@@ -3795,7 +3845,8 @@ static void disable_raw_mode(struct tui_state *state)
     }
     begin_frame(state);
     clear_dynamic(state);
-    write_text(state->output_descriptor, "\033[?2004l\033[0m\033[?25h");
+    write_text(state->output_descriptor,
+               "\033[?2004l\033[0m\033[?25h");
     end_frame(state);
     tcsetattr(state->input_descriptor, TCSAFLUSH, &state->saved_terminal);
     state->raw_enabled = false;
@@ -3953,20 +4004,31 @@ static bool run_interactive(struct tui_state *state,
         !start_turn(state, state->session->initial_prompt, error)) {
         goto cleanup;
     }
-    while (!state->exit_requested || state->worker_active) {
-        int ready;
+    {
+        bool need_redraw = true;
 
-        if (!drain_events(state, error) ||
-            (error != NULL && *error != NULL)) {
-            goto cleanup;
-        }
-        state->spinner += 1;
-        if (!render_dynamic(state)) {
-            telos_error_set(error, TELOS_ERROR_DOMAIN_IO, EIO,
-                      "Terminal frame could not be rendered");
-            goto cleanup;
-        }
-        ready = poll(&descriptor, 1, TUI_POLL_MILLISECONDS);
+        while (!state->exit_requested || state->worker_active) {
+            int ready;
+            bool did_work = false;
+
+            if (!drain_events(state, &did_work, error) ||
+                (error != NULL && *error != NULL)) {
+                goto cleanup;
+            }
+            state->spinner += 1;
+            if (did_work || need_redraw || !state->worker_active) {
+                if (!render_dynamic(state)) {
+                    telos_error_set(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                              "Terminal frame could not be rendered");
+                    goto cleanup;
+                }
+                need_redraw = false;
+            } else if (!refresh_footer(state)) {
+                telos_error_set(error, TELOS_ERROR_DOMAIN_IO, EIO,
+                          "Terminal footer could not be rendered");
+                goto cleanup;
+            }
+            ready = poll(&descriptor, 1, TUI_POLL_MILLISECONDS);
         if (ready < 0 && errno == EINTR) {
             continue;
         }
@@ -3975,9 +4037,12 @@ static bool run_interactive(struct tui_state *state,
                       "Terminal input polling failed");
             goto cleanup;
         }
-        if (ready > 0 && (descriptor.revents & (POLLIN | POLLHUP)) != 0 &&
-            !handle_input(state, error)) {
-            goto cleanup;
+        if (ready > 0 && (descriptor.revents & (POLLIN | POLLHUP)) != 0) {
+            if (!handle_input(state, error)) {
+                goto cleanup;
+            }
+            need_redraw = true;
+        }
         }
     }
     result = true;
@@ -3992,7 +4057,7 @@ cleanup:
          */
         for (int attempts = 0;
              state->worker_active && attempts < 2000; ++attempts) {
-            if (!drain_events(state, NULL)) {
+            if (!drain_events(state, NULL, NULL)) {
                 struct timespec delay = {.tv_nsec = 1000000};
 
                 nanosleep(&delay, NULL);

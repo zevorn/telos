@@ -65,6 +65,7 @@ static size_t overlay_render(void *context, char *buffer,
                               "  Tab                complete command\n"
                               "  ↑ / ↓             recall last prompt\n"
                               "  PgUp / PgDn        scroll history\n"
+                              "  Terminal scrollbar view earlier frames\n"
                               "  !command           run shell command\n"
                               "  !!command          run and send output\n"
                               "\n"
