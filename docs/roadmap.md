@@ -69,16 +69,23 @@ Telos 是一个用 C 构建的精简、确定性核心，配以"一切皆插件"
    Task Scope / Checkpoint / Reactor 能力，本身作为插件注册，
    平台按资源情况选择是否加载（Linux 完整版 / Zephyr 精简版）。
 
-## 4. 端侧 LLM 推理栈
+## 4. 模型来源：端侧与云端的反直觉分工
 
-| 项 | 方案 |
-|---|---|
-| 模型规模 | 1B / 3B / 5B / 10B，按 NPU 算力选型 |
-| 量化 | INT8 / INT4，QAT 优先 |
-| 推理后端 | NPU SDK 封装为 `TELOS_EXTENSION_PROVIDER` 插件 |
-| 流式 | 复用现有 provider 流式事件协议（thinking/text/tool） |
-| 上下文 | 环形压缩 + 会话检查点，适配端侧内存 |
-| 降级 | 模型不可用 → 确定性规则 fallback（优雅降级） |
+| 设备形态 | 资源 | 模型来源 | Telos 集成方式 |
+|---|---|---|---|
+| MCU（Zephyr） | 无 NPU、KB 级 RAM | **云端模型**（联网） | 网络传输插件 + 云 provider |
+| Linux + NPU | 1B-10B 本地可跑 | **本地模型**（localhost API） | provider 插件指向本地 endpoint |
+| Linux 桌面/CI | 充足 | 云 API 或本地 | 与上两者同构 |
+
+**核心洞察**：本地 NPU 模型（llama.cpp / MLC 等）以 API 形式暴露
+（如 `localhost:8080`），与云端 API 调用方式同构。Telos 的
+provider-neutral 请求 / 流式事件协议统一两者——provider 插件只是
+endpoint 不同，模型协议、工具、前端完全复用。
+
+**离线自治的重新定义**：
+- MCU 设备：断网自治 = 确定性规则 / workflow 执行；
+  LLM 决策需要网络，但本地规则引擎照常工作（优雅降级）
+- Linux + NPU 设备：真正的离线 LLM 自治（本地推理 + 本地决策闭环）
 
 ## 5. 高可信 Harness 设计
 
@@ -132,7 +139,7 @@ Telos 是一个用 C 构建的精简、确定性核心，配以"一切皆插件"
 | 工具 | bash / posix 工具集 | GPIO / 传感器工具 |
 | 存储 | JSONL / 内存 | Ring / Flash 环形 |
 | 传输 | curl / 网络 | SPI / Flash / 本地总线 |
-| 模型后端 | 云 API / NPU | NPU 量化（1B-10B） |
+| 模型后端 | 云 API / 本地 NPU API | 云 API（无 NPU，联网调用） |
 | 规则引擎（双通道） | 完整规则集 | 关键安全规则子集 |
 
 ### Hook 点设计原则
