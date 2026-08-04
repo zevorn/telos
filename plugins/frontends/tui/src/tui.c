@@ -168,6 +168,7 @@ struct tui_state {
     size_t rendered_rows;
     size_t rendered_cursor_row;
     unsigned int spinner;
+    volatile sig_atomic_t resize_pending;
 
     const struct telos_tui_plugin_definition_v1
         *tui_plugins[TELOS_TUI_MAXIMUM_PLUGINS];
@@ -182,6 +183,20 @@ struct tui_state {
 struct telos_tui_host {
     struct tui_state *state;
 };
+
+/*
+ * SIGWINCH forwarding: the interactive loop repaints on resize, so
+ * the user's drag/resize interactions never leave a stale frame.
+ */
+static struct tui_state *interactive_state;
+
+static void handle_resize(int signal_number)
+{
+    (void)signal_number;
+    if (interactive_state != NULL) {
+        interactive_state->resize_pending = 1;
+    }
+}
 
 struct editor_metrics {
     size_t total_rows;
@@ -1455,6 +1470,16 @@ static bool render_footer_content(struct tui_state *state, size_t columns,
                                           &visible_used,
                                           &has_segment, context);
                 }
+            } else if (context_used > 0) {
+                /* Model window unknown: still report usage. */
+                size_t used_k = (context_used + 999) / 1000;
+
+                if (snprintf(context, sizeof(context), "Context %zuK used",
+                             used_k) < (int)sizeof(context)) {
+                    append_footer_segment(visible, sizeof(visible),
+                                          &visible_used,
+                                          &has_segment, context);
+                }
             }
         }
         if (state->worker_active) {
@@ -1463,13 +1488,24 @@ static bool render_footer_content(struct tui_state *state, size_t columns,
                 spinners[state->spinner %
                          (sizeof(spinners) / sizeof(spinners[0]))]);
         }
+        /*
+         * Fallback: a status spec whose fields produced no segment
+         * (e.g. only "context" before the model window is known)
+         * must not leave the footer blank.
+         */
+        if (visible_used == 0) {
+            append_footer_segment(visible, sizeof(visible), &visible_used,
+                                  &has_segment, working);
+            append_footer_segment(visible, sizeof(visible), &visible_used,
+                                  &has_segment, model);
+        }
     }
     size = bytes_for_width(visible, strlen(visible), columns);
     if (state->color) {
-        append_text(footer, sizeof(footer), &footer_used,
+        append_text(footer, footer_size, &footer_used,
                     "\033[38;5;245m");
     }
-    append_bytes(footer, sizeof(footer), &footer_used, visible, size);
+    append_bytes(footer, footer_size, &footer_used, visible, size);
 
     /* Append TUI plugin footer sections. */
     for (size_t i = 0; i < state->tui_plugin_count; ++i) {
@@ -4175,6 +4211,8 @@ static bool run_interactive(struct tui_state *state,
     if (!enable_raw_mode(state, error)) {
         return false;
     }
+    interactive_state = state;
+    signal(SIGWINCH, handle_resize);
     write_header(state);
     if (state->session->initial_prompt != NULL &&
         state->session->initial_prompt[0] != '\0' &&
@@ -4188,19 +4226,28 @@ static bool run_interactive(struct tui_state *state,
             int ready;
             bool did_work = false;
 
+            if (state->resize_pending) {
+                state->resize_pending = 0;
+                need_redraw = true;
+            }
             if (!drain_events(state, &did_work, error) ||
                 (error != NULL && *error != NULL)) {
                 goto cleanup;
             }
             state->spinner += 1;
-            if (did_work || need_redraw || !state->worker_active) {
+            if (did_work || need_redraw) {
                 if (!render_dynamic(state)) {
                     telos_error_set(error, TELOS_ERROR_DOMAIN_IO, EIO,
                               "Terminal frame could not be rendered");
                     goto cleanup;
                 }
                 need_redraw = false;
-            } else if (!refresh_footer(state)) {
+            } else if (state->input_size == 0 && !refresh_footer(state)) {
+                /*
+                 * Skip the footer spinner refresh while the user is
+                 * typing: moving the cursor to the footer and back
+                 * every poll would disturb IME composition.
+                 */
                 telos_error_set(error, TELOS_ERROR_DOMAIN_IO, EIO,
                           "Terminal footer could not be rendered");
                 goto cleanup;
@@ -4246,6 +4293,8 @@ cleanup:
         }
     }
     disable_raw_mode(state);
+    signal(SIGWINCH, SIG_DFL);
+    interactive_state = NULL;
     return result;
 }
 

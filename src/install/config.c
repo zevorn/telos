@@ -50,7 +50,7 @@ static const char *const defaults[CONFIG_KEY_COUNT] = {
     "unconfigured",
     "https://api.openai.com/v1",
     "off",
-    "context",
+    "context,thinking",
     "",
     "container",
 };
