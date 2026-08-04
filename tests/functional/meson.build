@@ -104,6 +104,24 @@ test(
     suite: 'functional',
 )
 
+test_record_replay = executable(
+    'test-record-replay',
+    'test_record_replay.c',
+    dependencies: [
+        telos_jsonl_store_plugin_dep,
+        telos_state_dep,
+    ],
+    include_directories: inc_public,
+)
+
+test(
+    'record-replay',
+    test_record_replay,
+    workdir: meson.project_source_root(),
+    suite: 'functional',
+    timeout: 30,
+)
+
 if tui_frontend_available and curl_transport_available
     test_agent_server = executable(
         'test-agent-server',
