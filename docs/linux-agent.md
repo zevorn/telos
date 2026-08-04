@@ -39,14 +39,21 @@ export TELOS_AGENT_MODEL='your-responses-model'
 build/tools/telos
 ```
 
-The running TUI accepts `/model` to list the catalog of the current
-Provider and `/model openai/gpt-5` to select a model without restarting.
-Once a model is selected, `/model` lists only the models offered by that
-Provider; use scoped listing to avoid mixing unrelated vendors. `/model
-PROVIDER/MODEL` registers a bounded custom model when it is not in the
-official catalog, so a new upstream model does not require a Telos rebuild.
-`/thinking LEVEL` updates the provider request options for reasoning-capable
-models.
+The running TUI opens a model selector for `/model`. It shows the current
+Provider's models, marks the active model, and supports Up/Down, Enter, and
+Esc. `/model PROVIDER/MODEL` remains available for direct selection and
+registers a bounded custom model when it is not in the official catalog, so a
+new upstream model does not require a Telos rebuild. A selected model is saved
+to the user configuration as the next default. `/thinking LEVEL` updates and
+saves the provider request options for reasoning-capable models. `/setting`
+shows the common settings and accepts `model MODEL`, `thinking LEVEL`, or
+`status FIELDS`. `/status` configures the footer fields and saves them for the
+next session.
+
+The interactive footer displays estimated context usage and the model window.
+Tool calls appear in a compact scrolling panel above the editor (Ctrl+O toggles
+its expanded state), and common Markdown response constructs are rendered with
+terminal styling.
 
 See [openai-login.md](openai-login.md) for credential storage, refresh,
 status, logout, and the API-key alternative.
@@ -164,8 +171,12 @@ OpenAI device login, `/login PROVIDER` selects an API-key login target,
 removes that provider's cached key. When stdin or stdout is not a terminal,
 the Frontend automatically uses a plain line-oriented format.
 
-Use `/export PATH` to write the current bounded conversation as JSON and
-`/resume PATH` to validate and restore that file. `/fork` and `/clone` keep an
+Use `/export PATH` to write the current bounded conversation as JSON. Use
+`/sessions` followed by `/resume SESSION` to switch to a saved JSONL session;
+in the TUI, `/resume` followed by Tab lists named sessions above the editor and
+Enter switches to the selected one. Session names are inferred from the first
+user request and can be changed with `/rename NAME` or `/name NAME`. `/resume PATH`
+also validates and restores an exported file. `/fork` and `/clone` keep an
 in-process checkpoint for quick branching, while `/resume` without a path
 returns to that checkpoint.
 

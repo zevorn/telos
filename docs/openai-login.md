@@ -47,13 +47,13 @@ Or choose one from the running TUI without restarting it:
 
 ```text
 /model
-/model openai/gpt-5
+/model openai/gpt-5.5
 ```
 
-`/model` lists the models registered by the official Model Catalog Plugin.
-Provider/model syntax avoids ambiguity when two Providers expose the same
-model name. A model supplied through `TELOS_AGENT_MODEL` is also accepted as a
-custom model.
+The first command opens the TUI selector; use Up/Down and Enter to choose a
+model, or use the second command for direct selection. Provider/model syntax
+avoids ambiguity when two Providers expose the same model name. A model
+supplied through `TELOS_AGENT_MODEL` is also accepted as a custom model.
 
 After OAuth login, the Provider sends requests to OpenAI's ChatGPT Codex
 Responses service. OAuth credentials are never added to prompts, Events, or
