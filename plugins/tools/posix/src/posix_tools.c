@@ -650,6 +650,11 @@ static bool execute_bash(const struct telos_tool_context *context,
     int status = 0;
     bool child_done = false;
     bool stream_done = false;
+    bool output_truncated = false;
+    static const char truncated_marker[] = "\n[shell output truncated]\n";
+    const size_t marker_size = sizeof(truncated_marker) - 1;
+    const size_t capture_limit =
+        TELOS_POSIX_TOOLS_MAX_OUTPUT - 1 - marker_size;
 
     if (tools == NULL || command == NULL || command[0] == '\0') {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
@@ -730,16 +735,44 @@ static bool execute_bash(const struct telos_tool_context *context,
 
             do {
                 count = read(descriptors[0], chunk, sizeof(chunk));
-                if (count > 0 && !buffer_append(&output, chunk,
-                                                (size_t)count,
-                                                TELOS_POSIX_TOOLS_MAX_OUTPUT)) {
-                    kill(child, SIGTERM);
-                    waitpid(child, &status, 0);
-                    close(descriptors[0]);
-                    buffer_clear(&output);
-                    set_error(error, TELOS_ERROR_DOMAIN_IO, EFBIG,
-                              "Tool shell output is too large");
-                    return false;
+                if (count > 0) {
+                    size_t available = output.size < capture_limit
+                                           ? capture_limit - output.size
+                                           : 0;
+                    size_t copy = (size_t)count;
+
+                    if (output_truncated) {
+                        copy = 0;
+                    } else if (copy > available) {
+                        copy = available;
+                        output_truncated = true;
+                    }
+                    if (copy > 0 &&
+                        !buffer_append(&output, chunk, copy,
+                                       TELOS_POSIX_TOOLS_MAX_OUTPUT)) {
+                        if (!child_done) {
+                            kill(child, SIGKILL);
+                            while (waitpid(child, &status, 0) < 0 &&
+                                   errno == EINTR) {
+                            }
+                        }
+                        close(descriptors[0]);
+                        buffer_clear(&output);
+                        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                                  "Tool shell output allocation failed");
+                        return false;
+                    }
+                    if (copy < (size_t)count) {
+                        if (!child_done) {
+                            kill(child, SIGKILL);
+                            while (waitpid(child, &status, 0) < 0 &&
+                                   errno == EINTR) {
+                            }
+                            child_done = true;
+                        }
+                        stream_done = true;
+                        break;
+                    }
                 }
             } while (count > 0);
             if (count == 0) {
@@ -759,6 +792,14 @@ static bool execute_bash(const struct telos_tool_context *context,
     close(descriptors[0]);
     if (!child_done) {
         waitpid(child, &status, 0);
+    }
+    if (output_truncated &&
+        !buffer_append(&output, truncated_marker, marker_size,
+                       TELOS_POSIX_TOOLS_MAX_OUTPUT)) {
+        buffer_clear(&output);
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Tool shell output marker allocation failed");
+        return false;
     }
     {
         int64_t exit_code = WIFEXITED(status) ? WEXITSTATUS(status)

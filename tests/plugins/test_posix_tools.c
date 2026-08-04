@@ -118,6 +118,19 @@ int main(void)
                   "shell-output") == 0);
     telos_value_release(result);
     result = NULL;
+    assert(execute(generation, broker, "bash",
+                   "{\"command\":\"yes x | head -c 300000\"}",
+                   &result));
+    {
+        const char *output =
+            telos_value_string(telos_value_get(result, "output"));
+
+        assert(output != NULL);
+        assert(strlen(output) < 256U * 1024U);
+        assert(strstr(output, "[shell output truncated]") != NULL);
+    }
+    telos_value_release(result);
+    result = NULL;
     assert(!execute(generation, broker, "read",
                     "{\"path\":\"../outside\"}", &result));
 
