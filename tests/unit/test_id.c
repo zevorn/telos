@@ -5,8 +5,14 @@
 int main(void)
 {
     const struct telos_id original = telos_id_generate();
+    const struct telos_id next = telos_id_generate();
     struct telos_id parsed = {0};
     char text[TELOS_ID_TEXT_SIZE];
+
+    if (telos_id_equal(original, next)) {
+        fputs("generated IDs are not unique\n", stderr);
+        return 1;
+    }
 
     if (!telos_id_format(original, text, sizeof(text))) {
         fputs("failed to format generated ID\n", stderr);
