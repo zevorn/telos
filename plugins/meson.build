@@ -43,7 +43,7 @@ endif
 
 if tui_frontend_available
     telos_official_plugin_deps += telos_tui_frontend_plugin_dep
-    telos_official_plugin_deps += telos_git_branch_status_plugin_dep
+    telos_official_plugin_deps += telos_keybinding_help_plugin_dep
 endif
 
 if posix_host_plugins_available
