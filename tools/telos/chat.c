@@ -3739,7 +3739,7 @@ static bool chat_turn(const char *input, const struct telos_cancel *cancel,
             .observe_context = &observer,
             .steer = steer == NULL ? NULL : chat_agent_steer,
             .steer_context = &steer_context,
-            .maximum_provider_rounds = 8,
+            .maximum_provider_rounds = 32,
             .maximum_response_bytes = CHAT_MAXIMUM_RESPONSE_BYTES,
         };
 
