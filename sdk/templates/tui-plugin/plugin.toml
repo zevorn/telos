@@ -1,0 +1,27 @@
+[plugin]
+id = "dev.zevorn.MY-PLUGIN"
+name = "My TUI Plugin"
+version = "0.1.0"
+abi = 1
+entry = "telos_plugin_init_v1"
+
+[runtime]
+modes = ["builtin", "inprocess"]
+default = "builtin"
+
+[platform]
+targets = [
+    "linux-x86_64",
+    "linux-aarch64",
+    "linux-riscv64",
+    "darwin-x86_64",
+    "darwin-aarch64",
+]
+
+[build]
+system = "meson"
+
+[permissions]
+# List capabilities this plugin needs, e.g.:
+# required = ["posix.exec", "network.https"]
+required = []
