@@ -20,6 +20,10 @@ released under the same rules as the Plugins maintained by the core team.
 | [Project Guidance](context-sources/project-guidance/README.md) | Context Source | Linux and macOS |
 | [Terminal Frontend](frontends/tui/README.md) | Frontend | Linux and macOS |
 | [curl Transport](transports/curl/README.md) | Transport | Linux and macOS |
+| [Git Branch Status](tui/git-branch-status/README.md) | TUI Plugin | Linux and macOS |
+| [Keybinding Help](tui/keybinding-help/README.md) | TUI Plugin | Linux and macOS |
+| [Model Selector](tui/model-selector/README.md) | TUI Plugin | Linux and macOS |
+| [Shell Execution](tui/shell-exec/README.md) | TUI Plugin | Linux and macOS |
 | [Help Display](tui/help-display/README.md) | TUI Plugin | Linux and macOS |
 
 ## Plugin-first rule
