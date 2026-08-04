@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <telos/agent.h>
@@ -42,15 +44,32 @@
 #define CHAT_MAXIMUM_CONVERSATION_BYTES (4U * 1024U * 1024U)
 #define CHAT_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
 #define CHAT_SESSION_NAME_SIZE 128U
+#define CHAT_SESSION_PREVIEW_SIZE 192U
+#define CHAT_SESSION_COMPLETION_CAPACITY 64U
+#define CHAT_SESSION_FILE_NAME_SIZE 256U
 #define CHAT_SESSION_DIRECTORY_SIZE CHAT_PATH_SIZE
 #define CHAT_THINKING_LEVEL_SIZE 16U
 #define CHAT_MODEL_ID_SIZE 256U
+#define CHAT_STATUS_SPEC_SIZE 128U
+#define CHAT_GIT_BRANCH_SIZE 128U
 #define CHAT_AUTHENTICATION_CAPACITY 4U
+#define CHAT_OPENAI_CONTEXT_WINDOW 258000U
+#define CHAT_DEEPSEEK_CONTEXT_WINDOW 128000U
+#define CHAT_ANTHROPIC_CONTEXT_WINDOW 200000U
 
 struct chat_authentication_slot {
     const char *provider;
     const struct telos_authentication_definition_v1 *definition;
     struct telos_authentication *authentication;
+};
+
+struct chat_saved_session {
+    char file_name[CHAT_SESSION_FILE_NAME_SIZE];
+    char identifier[TELOS_ID_TEXT_SIZE];
+    char name[CHAT_SESSION_NAME_SIZE];
+    char preview[CHAT_SESSION_PREVIEW_SIZE];
+    time_t modified;
+    bool current;
 };
 
 struct chat_session {
@@ -86,6 +105,7 @@ struct chat_session {
     struct telos_command_registry commands;
     const struct telos_model_descriptor *selected_model;
     const char *configured_provider;
+    const struct telos_config *config;
     const char *home_directory;
     const char *current_directory;
     char authentication_directory[CHAT_PATH_SIZE];
@@ -94,6 +114,9 @@ struct chat_session {
         CHAT_AUTHENTICATION_CAPACITY];
     size_t authentication_count;
     char thinking_level[CHAT_THINKING_LEVEL_SIZE];
+    char status_spec[CHAT_STATUS_SPEC_SIZE];
+    char git_branch[CHAT_GIT_BRANCH_SIZE];
+    struct telos_frontend_status frontend_status;
     char session_name[CHAT_SESSION_NAME_SIZE];
     struct telos_value *checkpoint[CHAT_MAXIMUM_MESSAGES];
     size_t checkpoint_count;
@@ -113,11 +136,23 @@ static bool create_prompt(struct chat_session *chat,
                           struct telos_error **error);
 static bool find_project_root(const char *current_directory,
                               char root[CHAT_PATH_SIZE]);
+static struct telos_value *read_session_file(const char *path,
+                                             char *session_name,
+                                             size_t session_name_size,
+                                             struct telos_error **error);
 static struct telos_value *read_jsonl_session_file(const char *path,
+                                                   char *session_name,
+                                                   size_t session_name_size,
                                                    struct telos_error **error);
 static bool persist_session_marker(struct chat_session *chat,
                                    const char *type,
                                    struct telos_error **error);
+static bool persist_session_name(struct chat_session *chat,
+                                 struct telos_error **error);
+static bool set_session_name(struct chat_session *chat, const char *name,
+                             bool persist, struct telos_error **error);
+static void infer_session_name_from_items(const struct telos_value *items,
+                                          char target[], size_t target_size);
 static bool ensure_authentication(struct chat_session *chat,
                                   const char *provider,
                                   struct telos_error **error);
@@ -240,10 +275,162 @@ static bool persist_session_marker(struct chat_session *chat,
     return result;
 }
 
+static void infer_session_name_from_text(const char *text, char target[],
+                                         size_t target_size)
+{
+    const char *start = text;
+    size_t size;
+    size_t limit;
+
+    if (target == NULL || target_size == 0) {
+        return;
+    }
+    target[0] = '\0';
+    if (text == NULL) {
+        return;
+    }
+    while (*start != '\0' && isspace((unsigned char)*start)) {
+        ++start;
+    }
+    size = strcspn(start, "\r\n");
+    while (size > 0 && isspace((unsigned char)start[size - 1])) {
+        --size;
+    }
+    while (size > 0 &&
+           (start[size - 1] == '.' || start[size - 1] == '!' ||
+            start[size - 1] == '?' || start[size - 1] == ':' ||
+            start[size - 1] == ';' || start[size - 1] == ',')) {
+        --size;
+    }
+    if (size == 0) {
+        return;
+    }
+    if (size < target_size) {
+        memcpy(target, start, size);
+        target[size] = '\0';
+        return;
+    }
+    limit = target_size > sizeof("...") ? target_size - sizeof("...") : 0;
+    while (limit > 0 && (start[limit] & 0xc0) == 0x80) {
+        --limit;
+    }
+    if (limit == 0) {
+        return;
+    }
+    memcpy(target, start, limit);
+    memcpy(target + limit, "...", sizeof("..."));
+}
+
+static void infer_session_name_from_items(const struct telos_value *items,
+                                          char target[], size_t target_size)
+{
+    if (target == NULL || target_size == 0) {
+        return;
+    }
+    target[0] = '\0';
+    if (items == NULL || telos_value_type(items) != TELOS_VALUE_ARRAY) {
+        return;
+    }
+    for (size_t index = 0; index < telos_value_count(items); ++index) {
+        const struct telos_value *message = telos_value_at(items, index);
+        const char *role = telos_value_string(telos_value_get(message, "role"));
+        const char *content =
+            telos_value_string(telos_value_get(message, "content"));
+
+        if (role != NULL && strcmp(role, "user") == 0 && content != NULL) {
+            infer_session_name_from_text(content, target, target_size);
+            if (target[0] != '\0') {
+                return;
+            }
+        }
+    }
+}
+
+static bool persist_session_name(struct chat_session *chat,
+                                 struct telos_error **error)
+{
+    const char *keys[] = {"name"};
+    struct telos_value *name = NULL;
+    struct telos_value *payload = NULL;
+    const struct telos_value *values[1];
+    bool result;
+
+    if (chat->session_name[0] == '\0') {
+        return true;
+    }
+    name = telos_value_new_string(chat->session_name);
+    values[0] = name;
+    payload = name == NULL ? NULL : telos_value_new_object(keys, values, 1);
+    if (payload == NULL) {
+        telos_value_release(name);
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Session name allocation failed");
+        return false;
+    }
+    result = persist_session_value(chat, "session.name", payload, error);
+    telos_value_release(payload);
+    telos_value_release(name);
+    return result;
+}
+
+static bool set_session_name(struct chat_session *chat, const char *name,
+                             bool persist, struct telos_error **error)
+{
+    char candidate[CHAT_SESSION_NAME_SIZE];
+    char previous[CHAT_SESSION_NAME_SIZE];
+    const char *start = name == NULL ? "" : name;
+    size_t size;
+
+    while (isspace((unsigned char)*start)) {
+        ++start;
+    }
+    size = strlen(start);
+    while (size > 0 && isspace((unsigned char)start[size - 1])) {
+        --size;
+    }
+    if (size >= sizeof(candidate)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Session name is too long");
+        return false;
+    }
+    memcpy(candidate, start, size);
+    candidate[size] = '\0';
+    memcpy(previous, chat->session_name, sizeof(previous));
+    memcpy(chat->session_name, candidate, size + 1);
+    if (persist && !persist_session_name(chat, error)) {
+        memcpy(chat->session_name, previous, sizeof(chat->session_name));
+        return false;
+    }
+    return true;
+}
+
+static bool ensure_session_name(struct chat_session *chat,
+                                const struct telos_value *items,
+                                const char *input,
+                                bool persist,
+                                struct telos_error **error)
+{
+    char inferred[CHAT_SESSION_NAME_SIZE];
+
+    if (chat->session_name[0] != '\0') {
+        return true;
+    }
+    if (items != NULL) {
+        infer_session_name_from_items(items, inferred, sizeof(inferred));
+    } else {
+        infer_session_name_from_text(input, inferred, sizeof(inferred));
+    }
+    return inferred[0] == '\0' ||
+           set_session_name(chat, inferred, persist, error);
+}
+
 static bool persist_session_snapshot(struct chat_session *chat,
                                      struct telos_error **error)
 {
     if (!persist_session_marker(chat, "session.reset", error)) {
+        return false;
+    }
+    if (!persist_session_name(chat, error)) {
         return false;
     }
     for (size_t index = 0; index < chat->message_count; ++index) {
@@ -272,6 +459,121 @@ static const char *chat_model_get(void *context)
 
     return chat->selected_model == NULL ? "not configured"
                                         : chat->selected_model->id;
+}
+
+static const char *chat_thinking_get(void *context)
+{
+    const struct chat_session *chat = context;
+
+    return chat->thinking_level;
+}
+
+static const char *chat_branch_get(void *context)
+{
+    const struct chat_session *chat = context;
+
+    return chat->git_branch;
+}
+
+static size_t chat_context_used_get(void *context)
+{
+    const struct chat_session *chat = context;
+
+    return chat->conversation_bytes > SIZE_MAX - 3
+               ? SIZE_MAX / 4
+               : (chat->conversation_bytes + 3) / 4;
+}
+
+static size_t chat_context_window_get(void *context)
+{
+    const struct chat_session *chat = context;
+
+    if (chat->selected_model != NULL &&
+        chat->selected_model->context_window > 0) {
+        return chat->selected_model->context_window;
+    }
+    if (chat->selected_model == NULL ||
+        chat->selected_model->provider == NULL) {
+        return 0;
+    }
+    if (strcmp(chat->selected_model->provider, "openai") == 0) {
+        return CHAT_OPENAI_CONTEXT_WINDOW;
+    }
+    if (strcmp(chat->selected_model->provider, "deepseek") == 0 ||
+        strcmp(chat->selected_model->provider, "zai") == 0) {
+        return CHAT_DEEPSEEK_CONTEXT_WINDOW;
+    }
+    if (strcmp(chat->selected_model->provider, "anthropic") == 0) {
+        return CHAT_ANTHROPIC_CONTEXT_WINDOW;
+    }
+    return 0;
+}
+
+static bool discover_git_branch(const char *directory, char target[],
+                                size_t target_size)
+{
+    int descriptors[2];
+    pid_t child;
+    int status = 0;
+    size_t used = 0;
+    pid_t waited;
+
+    if (target == NULL || target_size == 0) {
+        return false;
+    }
+    target[0] = '\0';
+    if (directory == NULL || pipe(descriptors) != 0) {
+        return false;
+    }
+    child = fork();
+    if (child < 0) {
+        close(descriptors[0]);
+        close(descriptors[1]);
+        return false;
+    }
+    if (child == 0) {
+        if (dup2(descriptors[1], STDOUT_FILENO) < 0) {
+            _exit(127);
+        }
+        close(descriptors[0]);
+        close(descriptors[1]);
+        execlp("git", "git", "-C", directory, "rev-parse", "--abbrev-ref",
+               "HEAD", (char *)NULL);
+        _exit(127);
+    }
+    close(descriptors[1]);
+    while (used + 1 < target_size) {
+        ssize_t count = read(descriptors[0], target + used,
+                             target_size - used - 1);
+
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count <= 0) {
+            break;
+        }
+        used += (size_t)count;
+        if (memchr(target, '\n', used) != NULL) {
+            break;
+        }
+    }
+    close(descriptors[0]);
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited != child) {
+        target[0] = '\0';
+        return false;
+    }
+    target[used] = '\0';
+    for (size_t index = 0; index < used; ++index) {
+        if (target[index] == '\n' || target[index] == '\r') {
+            target[index] = '\0';
+            break;
+        }
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+           target[0] != '\0' && strcmp(target, "HEAD") != 0;
 }
 
 static const char *provider_display_name(const char *provider)
@@ -404,6 +706,53 @@ static enum telos_model_api model_api_for_provider(const char *provider)
     return TELOS_MODEL_API_OPENAI_CHAT;
 }
 
+static const char *model_provider_for(const char *provider)
+{
+    const char *canonical = canonical_provider(provider);
+
+    if (canonical == NULL) {
+        return NULL;
+    }
+    if (strcmp(canonical, "openai") == 0) {
+        return "openai";
+    }
+    if (strcmp(canonical, "deepseek") == 0) {
+        return "deepseek";
+    }
+    if (strcmp(canonical, "zai") == 0) {
+        return "zai";
+    }
+    if (strcmp(canonical, "anthropic") == 0) {
+        return "anthropic";
+    }
+    return NULL;
+}
+
+static bool model_provider_supported(const char *provider)
+{
+    return model_provider_for(provider) != NULL;
+}
+
+static const char *migrate_model_id(const char *provider, const char *model)
+{
+    if (model == NULL || provider == NULL || strcmp(provider, "openai") != 0) {
+        return model;
+    }
+    if (strcmp(model, "gpt-5") == 0) {
+        return "gpt-5.5";
+    }
+    if (strcmp(model, "gpt-5/sol") == 0) {
+        return "gpt-5.6-sol";
+    }
+    if (strcmp(model, "gpt-5/luna") == 0) {
+        return "gpt-5.6-luna";
+    }
+    if (strcmp(model, "gpt-5/terra") == 0) {
+        return "gpt-5.6-terra";
+    }
+    return model;
+}
+
 static bool copy_trimmed(const char *source, char *target, size_t capacity,
                          struct telos_error **error)
 {
@@ -429,6 +778,147 @@ static bool copy_trimmed(const char *source, char *target, size_t capacity,
     }
     memcpy(target, start, size);
     target[size] = '\0';
+    return true;
+}
+
+static bool status_field_token(const char *token, size_t size,
+                               unsigned int *field)
+{
+    static const struct {
+        const char *name;
+        unsigned int field;
+    } fields[] = {
+        {"model", TELOS_FRONTEND_STATUS_MODEL},
+        {"thinking", TELOS_FRONTEND_STATUS_THINKING},
+        {"path", TELOS_FRONTEND_STATUS_PATH},
+        {"branch", TELOS_FRONTEND_STATUS_BRANCH},
+        {"context", TELOS_FRONTEND_STATUS_CONTEXT},
+    };
+
+    for (size_t index = 0; index < sizeof(fields) / sizeof(fields[0]);
+         ++index) {
+        if (strlen(fields[index].name) == size &&
+            strncmp(fields[index].name, token, size) == 0) {
+            *field = fields[index].field;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool format_status_spec(unsigned int fields, char *target,
+                               size_t target_size,
+                               struct telos_error **error)
+{
+    static const struct {
+        const char *name;
+        unsigned int field;
+    } names[] = {
+        {"model", TELOS_FRONTEND_STATUS_MODEL},
+        {"thinking", TELOS_FRONTEND_STATUS_THINKING},
+        {"path", TELOS_FRONTEND_STATUS_PATH},
+        {"branch", TELOS_FRONTEND_STATUS_BRANCH},
+        {"context", TELOS_FRONTEND_STATUS_CONTEXT},
+    };
+    size_t used = 0;
+
+    if (fields == 0) {
+        if (snprintf(target, target_size, "none") >= (int)target_size) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Status specification is too long");
+            return false;
+        }
+        return true;
+    }
+    for (size_t index = 0; index < sizeof(names) / sizeof(names[0]);
+         ++index) {
+        if ((fields & names[index].field) == 0) {
+            continue;
+        }
+        int written = snprintf(target + used, target_size - used, "%s%s",
+                               used == 0 ? "" : ",", names[index].name);
+
+        if (written < 0 || (size_t)written >= target_size - used) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Status specification is too long");
+            return false;
+        }
+        used += (size_t)written;
+    }
+    return true;
+}
+
+static bool parse_status_spec(const char *source, unsigned int *fields,
+                              char *canonical, size_t canonical_size,
+                              struct telos_error **error)
+{
+    static const unsigned int all_fields =
+        TELOS_FRONTEND_STATUS_MODEL | TELOS_FRONTEND_STATUS_THINKING |
+        TELOS_FRONTEND_STATUS_PATH | TELOS_FRONTEND_STATUS_BRANCH |
+        TELOS_FRONTEND_STATUS_CONTEXT;
+    char specification[CHAT_STATUS_SPEC_SIZE];
+    unsigned int parsed = 0;
+    bool special = false;
+    bool token_seen = false;
+    char *cursor;
+
+    if (!copy_trimmed(source, specification, sizeof(specification), error) ||
+        specification[0] == '\0') {
+        if (error == NULL || *error == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                      "Status specification is empty");
+        }
+        return false;
+    }
+    cursor = specification;
+    while (*cursor != '\0') {
+        char *start;
+        size_t size;
+        unsigned int field;
+
+        while (*cursor == ',' || isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+        start = cursor;
+        while (*cursor != '\0' && *cursor != ',' &&
+               !isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        size = (size_t)(cursor - start);
+        token_seen = true;
+        if ((size == sizeof("all") - 1 &&
+             strncmp(start, "all", size) == 0) ||
+            (size == sizeof("none") - 1 &&
+             strncmp(start, "none", size) == 0)) {
+            if (special || parsed != 0) {
+                set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                          "Status all/none cannot be combined with fields");
+                return false;
+            }
+            special = true;
+            parsed = size == sizeof("all") - 1 ? all_fields : 0;
+            continue;
+        }
+        if (special || !status_field_token(start, size, &field)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                      "Status fields must be model, thinking, path, branch, "
+                      "context, all, or none");
+            return false;
+        }
+        parsed |= field;
+    }
+    if (!token_seen) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Status specification is empty");
+        return false;
+    }
+    if (!format_status_spec(parsed, canonical, canonical_size, error)) {
+        return false;
+    }
+    *fields = parsed;
     return true;
 }
 
@@ -608,12 +1098,18 @@ cleanup:
 }
 
 static struct telos_value *read_session_file(const char *path,
+                                             char *session_name,
+                                             size_t session_name_size,
                                              struct telos_error **error)
 {
     FILE *stream = fopen(path, "rb");
     long length;
     char *json;
     struct telos_value *items;
+
+    if (session_name != NULL && session_name_size > 0) {
+        session_name[0] = '\0';
+    }
 
     if (stream == NULL) {
         set_error(error, TELOS_ERROR_DOMAIN_IO, EIO,
@@ -646,12 +1142,14 @@ static struct telos_value *read_session_file(const char *path,
     json[length] = '\0';
     items = telos_value_parse_json(json, (size_t)length, error);
     free(json);
-    if (items == NULL) {
+    if (items == NULL || telos_value_type(items) != TELOS_VALUE_ARRAY) {
+        telos_value_release(items);
         if (error != NULL) {
             telos_error_release(*error);
             *error = NULL;
         }
-        return read_jsonl_session_file(path, error);
+        return read_jsonl_session_file(path, session_name, session_name_size,
+                                       error);
     }
     return items;
 }
@@ -687,12 +1185,18 @@ static bool append_loaded_session_item(struct telos_value **items,
 }
 
 static struct telos_value *read_jsonl_session_file(const char *path,
+                                                   char *session_name,
+                                                   size_t session_name_size,
                                                    struct telos_error **error)
 {
     struct telos_event_store *store = NULL;
     struct telos_value *items[CHAT_MAXIMUM_MESSAGES] = {0};
     struct telos_value *result = NULL;
     size_t count = 0;
+
+    if (session_name != NULL && session_name_size > 0) {
+        session_name[0] = '\0';
+    }
 
     store = telos_jsonl_store_create(path, error);
     if (store == NULL) {
@@ -708,12 +1212,30 @@ static struct telos_value *read_jsonl_session_file(const char *path,
         type = telos_event_type(event);
         if (strcmp(type, "session.reset") == 0) {
             release_session_items(items, &count);
+            if (session_name != NULL && session_name_size > 0) {
+                session_name[0] = '\0';
+            }
+        } else if (strcmp(type, "session.name") == 0) {
+            const struct telos_value *payload = telos_event_payload(event);
+            const char *name = payload == NULL
+                                   ? NULL
+                                   : telos_value_string(
+                                         telos_value_get(payload, "name"));
+
+            if (session_name != NULL && session_name_size > 0 && name != NULL &&
+                strlen(name) < session_name_size) {
+                memcpy(session_name, name, strlen(name) + 1);
+            }
         } else if (strcmp(type, "message") == 0) {
             const struct telos_value *payload = telos_event_payload(event);
-            const char *role = telos_value_string(
-                telos_value_get(payload, "role"));
-            const char *content = telos_value_string(
-                telos_value_get(payload, "content"));
+            const char *role = payload == NULL
+                                   ? NULL
+                                   : telos_value_string(
+                                         telos_value_get(payload, "role"));
+            const char *content = payload == NULL
+                                      ? NULL
+                                      : telos_value_string(
+                                            telos_value_get(payload, "content"));
 
             if (payload == NULL || telos_value_type(payload) !=
                                        TELOS_VALUE_OBJECT ||
@@ -1178,19 +1700,26 @@ static void clear_messages(struct chat_session *chat)
     drop_messages(chat, chat->message_count);
 }
 
-static bool append_message(struct chat_session *chat, const char *role,
-                           const char *text, struct telos_error **error)
+static bool append_message_value(struct chat_session *chat,
+                                 struct telos_value *message, size_t size,
+                                 struct telos_error **error)
 {
-    size_t size = strlen(text);
-    struct telos_value *message;
+    struct telos_value *owned_message;
 
+    if (message == NULL || telos_value_type(message) != TELOS_VALUE_OBJECT) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Agent conversation message is invalid");
+        return false;
+    }
     if (size > CHAT_MAXIMUM_CONVERSATION_BYTES) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EFBIG,
                   "Agent conversation message is too large");
         return false;
     }
-    message = create_message(role, text, error);
-    if (message == NULL) {
+    owned_message = telos_value_retain(message);
+    if (owned_message == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_MEMORY, ENOMEM,
+                  "Agent conversation message allocation failed");
         return false;
     }
     while (chat->message_count >= CHAT_MAXIMUM_MESSAGES ||
@@ -1198,19 +1727,33 @@ static bool append_message(struct chat_session *chat, const char *role,
                       chat->conversation_bytes) {
         drop_messages(chat, chat->message_count >= 2 ? 2 : 1);
     }
-    chat->messages[chat->message_count] = message;
+    chat->messages[chat->message_count] = owned_message;
     chat->message_sizes[chat->message_count] = size;
     chat->message_count += 1;
     chat->conversation_bytes += size;
-    if (!persist_session_value(chat, "message", message, error)) {
+    if (!persist_session_value(chat, "message", owned_message, error)) {
         chat->message_count -= 1;
         chat->conversation_bytes -= size;
         chat->messages[chat->message_count] = NULL;
         chat->message_sizes[chat->message_count] = 0;
-        telos_value_release(message);
+        telos_value_release(owned_message);
         return false;
     }
     return true;
+}
+
+static bool append_message(struct chat_session *chat, const char *role,
+                           const char *text, struct telos_error **error)
+{
+    struct telos_value *message = create_message(role, text, error);
+    bool result;
+
+    if (message == NULL) {
+        return false;
+    }
+    result = append_message_value(chat, message, strlen(text), error);
+    telos_value_release(message);
+    return result;
 }
 
 static bool emit_frontend(struct observer_context *observer,
@@ -1228,10 +1771,198 @@ static bool emit_frontend(struct observer_context *observer,
     return observer->emit(&event, observer->emit_context, error);
 }
 
+static void append_detail_text(char *target, size_t target_size, size_t *used,
+                               const char *text, size_t maximum)
+{
+    size_t size = text == NULL ? 0 : strlen(text);
+
+    if (target == NULL || used == NULL || target_size == 0 ||
+        *used >= target_size) {
+        return;
+    }
+    if (size > maximum) {
+        size = maximum;
+    }
+    for (size_t index = 0; index < size && *used + 1 < target_size; ++index) {
+        unsigned char value = (unsigned char)text[index];
+
+        target[(*used)++] =
+            value < 0x20U || value == 0x7fU ? ' ' : (char)value;
+    }
+    target[*used] = '\0';
+    if (text != NULL && strlen(text) > maximum && *used + 4 < target_size) {
+        memcpy(target + *used, "...", 4);
+        *used += 3;
+        target[*used] = '\0';
+    }
+}
+
+static void append_tool_value(char *target, size_t target_size, size_t *used,
+                              const struct telos_value *value)
+{
+    int64_t integer;
+    bool boolean;
+    const char *text;
+
+    if (value == NULL) {
+        return;
+    }
+    text = telos_value_string(value);
+    if (text != NULL) {
+        append_detail_text(target, target_size, used, text, 96);
+        return;
+    }
+    if (telos_value_integer(value, &integer)) {
+        int written = snprintf(target + *used, target_size - *used, "%lld",
+                               (long long)integer);
+
+        if (written > 0 && (size_t)written < target_size - *used) {
+            *used += (size_t)written;
+        }
+        return;
+    }
+    if (telos_value_boolean(value, &boolean)) {
+        append_detail_text(target, target_size, used,
+                           boolean ? "true" : "false", SIZE_MAX);
+        return;
+    }
+    append_detail_text(target, target_size, used,
+                       telos_value_type(value) == TELOS_VALUE_ARRAY
+                           ? "[list]"
+                           : telos_value_type(value) == TELOS_VALUE_OBJECT
+                                 ? "{...}"
+                                 : "[value]",
+                       SIZE_MAX);
+}
+
+static void append_tool_member(char *target, size_t target_size, size_t *used,
+                               bool *has_member, const char *key,
+                               const struct telos_value *value)
+{
+    if (value == NULL || *used + 1 >= target_size) {
+        return;
+    }
+    if (*has_member) {
+        append_detail_text(target, target_size, used, ", ", SIZE_MAX);
+    }
+    append_detail_text(target, target_size, used, key, SIZE_MAX);
+    append_detail_text(target, target_size, used, "=", SIZE_MAX);
+    append_tool_value(target, target_size, used, value);
+    *has_member = true;
+}
+
+static void append_tool_arguments(char *target, size_t target_size,
+                                  size_t *used,
+                                  const struct telos_value *arguments)
+{
+    static const char *const preferred[] = {
+        "path", "line_start", "line_end", "command", "query", "pattern",
+        "url",
+    };
+    bool has_member = false;
+
+    if (arguments == NULL) {
+        return;
+    }
+    for (size_t index = 0; index < sizeof(preferred) / sizeof(preferred[0]);
+         ++index) {
+        append_tool_member(target, target_size, used, &has_member,
+                           preferred[index],
+                           telos_value_get(arguments, preferred[index]));
+    }
+    if (!has_member && telos_value_type(arguments) == TELOS_VALUE_OBJECT) {
+        for (size_t index = 0;
+             index < telos_value_count(arguments) && index < 2; ++index) {
+            const char *key = telos_value_key_at(arguments, index);
+
+            if (key != NULL && strcmp(key, "content") != 0) {
+                append_tool_member(target, target_size, used, &has_member, key,
+                                   telos_value_get(arguments, key));
+            }
+        }
+    }
+}
+
+static void append_tool_result(char *target, size_t target_size, size_t *used,
+                               const struct telos_value *result)
+{
+    const struct telos_value *value;
+    int64_t integer;
+
+    if (result == NULL || telos_value_type(result) != TELOS_VALUE_OBJECT) {
+        return;
+    }
+    value = telos_value_get(result, "bytes");
+    if (value != NULL && telos_value_integer(value, &integer)) {
+        char summary[64];
+
+        if (snprintf(summary, sizeof(summary), "wrote %lld bytes",
+                     (long long)integer) < (int)sizeof(summary)) {
+            append_detail_text(target, target_size, used, summary, SIZE_MAX);
+        }
+        return;
+    }
+    value = telos_value_get(result, "content");
+    if (value != NULL && telos_value_string(value) != NULL) {
+        char summary[64];
+
+        if (snprintf(summary, sizeof(summary), "read %zu chars",
+                     strlen(telos_value_string(value))) < (int)sizeof(summary)) {
+            append_detail_text(target, target_size, used, summary, SIZE_MAX);
+        }
+        return;
+    }
+    value = telos_value_get(result, "output");
+    if (value != NULL && telos_value_string(value) != NULL) {
+        char summary[64];
+
+        if (snprintf(summary, sizeof(summary), "output %zu chars",
+                     strlen(telos_value_string(value))) < (int)sizeof(summary)) {
+            append_detail_text(target, target_size, used, summary, SIZE_MAX);
+        }
+        return;
+    }
+    value = telos_value_get(result, "exit_code");
+    if (value != NULL && telos_value_integer(value, &integer)) {
+        char summary[64];
+
+        if (snprintf(summary, sizeof(summary), "exit %lld",
+                     (long long)integer) < (int)sizeof(summary)) {
+            append_detail_text(target, target_size, used, summary, SIZE_MAX);
+        }
+    }
+}
+
+static void summarize_tool_event(const struct telos_agent_event *event,
+                                 bool completed, char *target,
+                                 size_t target_size)
+{
+    size_t used = 0;
+
+    target[0] = '\0';
+    append_tool_arguments(target, target_size, &used, event->tool_arguments);
+    if (completed && event->tool_result != NULL) {
+        if (used > 0) {
+            append_detail_text(target, target_size, &used, " · ", SIZE_MAX);
+        }
+        append_tool_result(target, target_size, &used, event->tool_result);
+    } else if (!completed && used == 0) {
+        append_detail_text(target, target_size, &used, "running", SIZE_MAX);
+    } else if (event->tool_error != NULL) {
+        if (used > 0) {
+            append_detail_text(target, target_size, &used, " · ", SIZE_MAX);
+        }
+        append_detail_text(target, target_size, &used, "error: ", SIZE_MAX);
+        append_detail_text(target, target_size, &used,
+                           telos_error_message(event->tool_error), 96);
+    }
+}
+
 static bool observe_agent(const struct telos_agent_event *event,
                           void *context, struct telos_error **error)
 {
     struct observer_context *observer = context;
+    char detail[256];
 
     if (event->kind == TELOS_AGENT_PROVIDER_EVENT) {
         const struct telos_provider_event *provider = event->provider_event;
@@ -1247,15 +1978,18 @@ static bool observe_agent(const struct telos_agent_event *event,
         return true;
     }
     if (event->kind == TELOS_AGENT_TOOL_STARTED) {
-        return emit_frontend(observer, TELOS_FRONTEND_TOOL_STARTED, NULL,
+        summarize_tool_event(event, false, detail, sizeof(detail));
+        return emit_frontend(observer, TELOS_FRONTEND_TOOL_STARTED, detail,
                              event->tool_name, error);
     }
     if (event->kind == TELOS_AGENT_TOOL_COMPLETED) {
-        return emit_frontend(observer, TELOS_FRONTEND_TOOL_COMPLETED, NULL,
+        summarize_tool_event(event, true, detail, sizeof(detail));
+        return emit_frontend(observer, TELOS_FRONTEND_TOOL_COMPLETED, detail,
                              event->tool_name, error);
     }
     if (event->kind == TELOS_AGENT_TOOL_FAILED) {
-        return emit_frontend(observer, TELOS_FRONTEND_TOOL_FAILED, NULL,
+        summarize_tool_event(event, true, detail, sizeof(detail));
+        return emit_frontend(observer, TELOS_FRONTEND_TOOL_FAILED, detail,
                              event->tool_name, error);
     }
     return true;
@@ -1484,6 +2218,9 @@ static bool clear_command(const char *arguments,
         return false;
     }
     clear_messages(chat);
+    if (!persist_session_name(chat, error)) {
+        return false;
+    }
     return emit_frontend(&observer, TELOS_FRONTEND_NOTICE,
                          "conversation cleared", NULL, error);
 }
@@ -1530,12 +2267,9 @@ static bool name_command(const char *arguments,
         }
         return emit_notice(emit, emit_context, message, error);
     }
-    if (strlen(arguments) >= sizeof(chat->session_name)) {
-        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
-                  "Session name is too long");
+    if (!set_session_name(chat, arguments, true, error)) {
         return false;
     }
-    memcpy(chat->session_name, arguments, strlen(arguments) + 1);
     if (snprintf(message, sizeof(message), "session named: %s",
                  chat->session_name) >= (int)sizeof(message)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
@@ -1571,6 +2305,203 @@ static bool session_command(const char *arguments,
     return emit_notice(emit, emit_context, message, error);
 }
 
+static bool session_directory_path(const struct chat_session *chat,
+                                   char directory[], size_t directory_size,
+                                   struct telos_error **error)
+{
+    const char *separator = strrchr(chat->session_path, '/');
+    size_t length;
+
+    if (separator == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Session directory is invalid");
+        return false;
+    }
+    length = (size_t)(separator - chat->session_path);
+    if (length >= directory_size) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
+                  "Session directory is too long");
+        return false;
+    }
+    memcpy(directory, chat->session_path, length);
+    directory[length] = '\0';
+    return true;
+}
+
+static time_t session_file_modified(const struct stat *status)
+{
+#if defined(__APPLE__)
+    return status->st_mtimespec.tv_sec;
+#elif defined(__linux__)
+    return status->st_mtim.tv_sec;
+#else
+    return status->st_mtime;
+#endif
+}
+
+static int compare_saved_sessions(const void *lhs, const void *rhs)
+{
+    const struct chat_saved_session *left = lhs;
+    const struct chat_saved_session *right = rhs;
+
+    if (left->modified != right->modified) {
+        return left->modified > right->modified ? -1 : 1;
+    }
+    return strcmp(left->file_name, right->file_name);
+}
+
+static size_t collect_saved_sessions(const struct chat_session *chat,
+                                     struct chat_saved_session sessions[],
+                                     size_t capacity)
+{
+    char directory[CHAT_PATH_SIZE];
+    const char *current_name;
+    DIR *stream;
+    struct dirent *entry;
+    size_t count = 0;
+
+    if (sessions == NULL || capacity == 0 ||
+        !session_directory_path(chat, directory, sizeof(directory), NULL)) {
+        return 0;
+    }
+    current_name = strrchr(chat->session_path, '/') + 1;
+    stream = opendir(directory);
+    if (stream == NULL) {
+        return 0;
+    }
+    while ((entry = readdir(stream)) != NULL && count < capacity) {
+        char path[CHAT_PATH_SIZE];
+        struct stat status;
+        struct telos_value *items;
+        struct chat_saved_session *saved = &sessions[count];
+        size_t name_size = strlen(entry->d_name);
+        size_t identifier_size;
+
+        if (name_size <= sizeof(".jsonl") - 1 ||
+            name_size >= sizeof(saved->file_name) ||
+            strcmp(entry->d_name + name_size - (sizeof(".jsonl") - 1),
+                   ".jsonl") != 0 ||
+            snprintf(path, sizeof(path), "%s/%s", directory,
+                     entry->d_name) >= (int)sizeof(path) ||
+            stat(path, &status) != 0 || !S_ISREG(status.st_mode)) {
+            continue;
+        }
+        identifier_size = name_size - (sizeof(".jsonl") - 1);
+        if (identifier_size == 0 || identifier_size >= sizeof(saved->identifier)) {
+            continue;
+        }
+        memset(saved, 0, sizeof(*saved));
+        memcpy(saved->file_name, entry->d_name, name_size + 1);
+        memcpy(saved->identifier, entry->d_name, identifier_size);
+        saved->identifier[identifier_size] = '\0';
+        saved->modified = session_file_modified(&status);
+        saved->current = strcmp(entry->d_name, current_name) == 0;
+        items = read_session_file(path, saved->name, sizeof(saved->name), NULL);
+        if (items != NULL) {
+            if (saved->name[0] == '\0') {
+                infer_session_name_from_items(items, saved->name,
+                                              sizeof(saved->name));
+            }
+            infer_session_name_from_items(items, saved->preview,
+                                          sizeof(saved->preview));
+            telos_value_release(items);
+        }
+        if (saved->name[0] == '\0') {
+            memcpy(saved->name, "New session", sizeof("New session"));
+        }
+        ++count;
+    }
+    closedir(stream);
+    qsort(sessions, count, sizeof(sessions[0]), compare_saved_sessions);
+    return count;
+}
+
+static bool session_completion_matches(const struct chat_saved_session *saved,
+                                       const char *query)
+{
+    size_t query_size = query == NULL ? 0 : strlen(query);
+
+    return query_size == 0 ||
+           strncmp(saved->identifier, query, query_size) == 0 ||
+           strncmp(saved->name, query, query_size) == 0;
+}
+
+static const char *resume_completion_query(const char *input)
+{
+    const char *query = input + sizeof("/resume") - 1U;
+
+    while (*query == ' ' || *query == '\t') {
+        ++query;
+    }
+    return query;
+}
+
+static size_t session_completion_count(const char *input, void *context)
+{
+    struct chat_session *chat = context;
+    struct chat_saved_session sessions[CHAT_SESSION_COMPLETION_CAPACITY];
+    const char *query;
+    size_t count;
+    size_t matches = 0;
+
+    if (chat == NULL || input == NULL ||
+        strncmp(input, "/resume", sizeof("/resume") - 1U) != 0) {
+        return 0;
+    }
+    query = resume_completion_query(input);
+    count = collect_saved_sessions(chat, sessions,
+                                   sizeof(sessions) / sizeof(sessions[0]));
+    for (size_t index = 0; index < count; ++index) {
+        if (session_completion_matches(&sessions[index], query)) {
+            ++matches;
+        }
+    }
+    return matches;
+}
+
+static bool session_completion_at(
+    const char *input, size_t ordinal,
+    struct telos_frontend_completion_item *item, void *context)
+{
+    struct chat_session *chat = context;
+    struct chat_saved_session sessions[CHAT_SESSION_COMPLETION_CAPACITY];
+    const char *query;
+    size_t count;
+
+    if (chat == NULL || input == NULL || item == NULL ||
+        strncmp(input, "/resume", sizeof("/resume") - 1U) != 0) {
+        return false;
+    }
+    query = resume_completion_query(input);
+    count = collect_saved_sessions(chat, sessions,
+                                   sizeof(sessions) / sizeof(sessions[0]));
+    for (size_t index = 0; index < count; ++index) {
+        const struct chat_saved_session *saved = &sessions[index];
+        int detail_size;
+
+        if (!session_completion_matches(saved, query)) {
+            continue;
+        }
+        if (ordinal > 0) {
+            --ordinal;
+            continue;
+        }
+        if (snprintf(item->value, sizeof(item->value), "/resume %s",
+                     saved->identifier) >= (int)sizeof(item->value) ||
+            snprintf(item->label, sizeof(item->label), "%s%s", saved->name,
+                     saved->current ? " (current)" : "") >=
+                (int)sizeof(item->label)) {
+            return false;
+        }
+        detail_size = snprintf(item->detail, sizeof(item->detail), "%s%s%s",
+                               saved->identifier,
+                               saved->preview[0] == '\0' ? "" : " · ",
+                               saved->preview);
+        return detail_size >= 0 && detail_size < (int)sizeof(item->detail);
+    }
+    return false;
+}
+
 static bool sessions_command(const char *arguments,
                              const struct telos_cancel *cancel,
                              telos_frontend_emit_fn emit,
@@ -1579,84 +2510,71 @@ static bool sessions_command(const char *arguments,
                              struct telos_error **error)
 {
     struct chat_session *chat = context;
+    struct chat_saved_session sessions[CHAT_SESSION_COMPLETION_CAPACITY];
     char directory[CHAT_PATH_SIZE];
     char text[TELOS_COMMAND_ARGUMENT_SIZE] = "saved sessions:\n";
     size_t used = sizeof("saved sessions:\n") - 1;
-    const char *separator;
-    DIR *stream;
-    struct dirent *entry;
-    size_t count = 0;
+    size_t count;
 
     (void)arguments;
     (void)cancel;
-    separator = strrchr(chat->session_path, '/');
-    if (separator == NULL ||
-        (size_t)(separator - chat->session_path) >= sizeof(directory)) {
-        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
-                  "Session directory is invalid");
+    if (!session_directory_path(chat, directory, sizeof(directory), error)) {
         return false;
     }
-    memcpy(directory, chat->session_path,
-           (size_t)(separator - chat->session_path));
-    directory[separator - chat->session_path] = '\0';
-    stream = opendir(directory);
-    if (stream == NULL) {
-        set_error(error, TELOS_ERROR_DOMAIN_IO, errno,
-                  "Session directory could not be opened");
-        return false;
-    }
-    while ((entry = readdir(stream)) != NULL && count < 32U) {
-        size_t name_size = strlen(entry->d_name);
+    count = collect_saved_sessions(
+        chat, sessions, sizeof(sessions) / sizeof(sessions[0]));
+    for (size_t index = 0; index < count; ++index) {
         int written;
 
-        if (name_size < sizeof(".jsonl") - 1 ||
-            strcmp(entry->d_name + name_size - (sizeof(".jsonl") - 1),
-                   ".jsonl") != 0) {
-            continue;
-        }
-        written = snprintf(text + used, sizeof(text) - used, "  %s%s\n",
-                           entry->d_name,
-                           strcmp(entry->d_name,
-                                  strrchr(chat->session_path, '/') + 1) == 0
-                               ? " (current)"
-                               : "");
+        written = snprintf(text + used, sizeof(text) - used,
+                           "  %s · %s%s\n", sessions[index].identifier,
+                           sessions[index].name,
+                           sessions[index].current ? " (current)" : "");
         if (written < 0 || (size_t)written >= sizeof(text) - used) {
-            closedir(stream);
             set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                       "Session list is too large");
             return false;
         }
         used += (size_t)written;
-        ++count;
     }
-    closedir(stream);
     if (count == 0) {
         memcpy(text, "no saved sessions", sizeof("no saved sessions"));
     }
     return emit_notice(emit, emit_context, text, error);
 }
 
+static bool session_file_newer(const struct stat *candidate,
+                               const struct stat *current)
+{
+#if defined(__APPLE__)
+    return candidate->st_mtimespec.tv_sec > current->st_mtimespec.tv_sec ||
+           (candidate->st_mtimespec.tv_sec == current->st_mtimespec.tv_sec &&
+            candidate->st_mtimespec.tv_nsec > current->st_mtimespec.tv_nsec);
+#elif defined(__linux__)
+    return candidate->st_mtim.tv_sec > current->st_mtim.tv_sec ||
+           (candidate->st_mtim.tv_sec == current->st_mtim.tv_sec &&
+            candidate->st_mtim.tv_nsec > current->st_mtim.tv_nsec);
+#else
+    return candidate->st_mtime > current->st_mtime;
+#endif
+}
+
 static bool load_latest_session(struct chat_session *chat,
                                 struct telos_error **error)
 {
     char directory[CHAT_PATH_SIZE];
-    char latest[CHAT_PATH_SIZE] = {0};
-    const char *separator = strrchr(chat->session_path, '/');
+    const char *current_name;
     struct stat latest_status = {0};
     DIR *stream;
     struct dirent *entry;
     bool found = false;
-    struct telos_value *items;
+    struct telos_value *latest_items = NULL;
+    char latest_name[CHAT_SESSION_NAME_SIZE] = {0};
 
-    if (separator == NULL ||
-        (size_t)(separator - chat->session_path) >= sizeof(directory)) {
-        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
-                  "Session directory is invalid");
+    if (!session_directory_path(chat, directory, sizeof(directory), error)) {
         return false;
     }
-    memcpy(directory, chat->session_path,
-           (size_t)(separator - chat->session_path));
-    directory[separator - chat->session_path] = '\0';
+    current_name = strrchr(chat->session_path, '/') + 1;
     stream = opendir(directory);
     if (stream == NULL) {
         if (errno == ENOENT) {
@@ -1674,30 +2592,163 @@ static bool load_latest_session(struct chat_session *chat,
         if (name_size < sizeof(".jsonl") - 1 ||
             strcmp(entry->d_name + name_size - (sizeof(".jsonl") - 1),
                    ".jsonl") != 0 ||
-            strcmp(entry->d_name, separator + 1) == 0 ||
+            strcmp(entry->d_name, current_name) == 0 ||
             snprintf(path, sizeof(path), "%s/%s", directory,
                      entry->d_name) >= (int)sizeof(path) ||
             stat(path, &status) != 0 || !S_ISREG(status.st_mode)) {
             continue;
         }
-        if (!found || status.st_mtime > latest_status.st_mtime) {
-            memcpy(latest, path, strlen(path) + 1);
+        if (status.st_size == 0) {
+            continue;
+        }
+        if (!found || session_file_newer(&status, &latest_status)) {
+            char loaded_name[CHAT_SESSION_NAME_SIZE] = {0};
+            struct telos_value *items = read_session_file(
+                path, loaded_name, sizeof(loaded_name), error);
+
+            if (items == NULL) {
+                closedir(stream);
+                telos_value_release(latest_items);
+                return false;
+            }
+            if (telos_value_count(items) == 0) {
+                telos_value_release(items);
+                continue;
+            }
+            telos_value_release(latest_items);
+            latest_items = items;
+            memcpy(latest_name, loaded_name, sizeof(latest_name));
             latest_status = status;
             found = true;
         }
     }
     closedir(stream);
-    if (!found) {
+    if (!found || latest_items == NULL) {
         return true;
     }
-    items = read_session_file(latest, error);
-    if (items == NULL || !replace_messages(chat, items, error)) {
-        telos_value_release(items);
+    if (!replace_messages(chat, latest_items, error)) {
+        telos_value_release(latest_items);
         return false;
     }
-    telos_value_release(items);
+    if (!set_session_name(chat, latest_name, false, error) ||
+        !ensure_session_name(chat, latest_items, NULL, true, error)) {
+        telos_value_release(latest_items);
+        return false;
+    }
+    telos_value_release(latest_items);
     return persist_session_snapshot(chat, error) &&
            checkpoint_messages(chat, error);
+}
+
+static bool resolve_resume_path(const struct chat_session *chat,
+                                const char *arguments, char path[],
+                                size_t path_size,
+                                struct telos_error **error)
+{
+    char directory[CHAT_PATH_SIZE];
+    struct telos_id identifier;
+
+    if (arguments == NULL || arguments[0] == '\0') {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Session name is required");
+        return false;
+    }
+    if (strchr(arguments, '/') != NULL) {
+        if (snprintf(path, path_size, "%s", arguments) >= (int)path_size) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
+                      "Session path is too long");
+            return false;
+        }
+        return true;
+    }
+    if (!session_directory_path(chat, directory, sizeof(directory), error)) {
+        return false;
+    }
+    if (telos_id_parse(arguments, &identifier)) {
+        if (snprintf(path, path_size, "%s/%s.jsonl", directory, arguments) >=
+            (int)path_size) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
+                      "Session path is too long");
+            return false;
+        }
+        return true;
+    }
+    if (snprintf(path, path_size, "%s/%s%s", directory, arguments,
+                 strstr(arguments, ".jsonl") == NULL ? ".jsonl" : "") >=
+        (int)path_size) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENAMETOOLONG,
+                  "Session path is too long");
+        return false;
+    }
+    return true;
+}
+
+static bool session_path_identifier(const struct chat_session *chat,
+                                    const char *path,
+                                    struct telos_id *identifier)
+{
+    char directory[CHAT_PATH_SIZE];
+    const char *separator;
+    const char *name;
+    size_t directory_size;
+    size_t name_size;
+
+    if (!session_directory_path(chat, directory, sizeof(directory), NULL) ||
+        path == NULL || identifier == NULL) {
+        return false;
+    }
+    directory_size = strlen(directory);
+    if (strlen(path) <= directory_size ||
+        strncmp(path, directory, directory_size) != 0 ||
+        path[directory_size] != '/') {
+        return false;
+    }
+    separator = strrchr(path, '/');
+    name = separator == NULL ? path : separator + 1;
+    name_size = strlen(name);
+    if (name_size != (TELOS_ID_TEXT_SIZE - 1) + sizeof(".jsonl") - 1 ||
+        strcmp(name + TELOS_ID_TEXT_SIZE - 1, ".jsonl") != 0) {
+        return false;
+    }
+    {
+        char identifier_text[TELOS_ID_TEXT_SIZE];
+
+        memcpy(identifier_text, name, TELOS_ID_TEXT_SIZE - 1);
+        identifier_text[TELOS_ID_TEXT_SIZE - 1] = '\0';
+        return telos_id_parse(identifier_text, identifier);
+    }
+}
+
+static bool switch_persisted_session(struct chat_session *chat,
+                                     const char *path,
+                                     struct telos_id identifier,
+                                     const struct telos_value *items,
+                                     struct telos_error **error)
+{
+    struct telos_event_store *store = NULL;
+    struct telos_event_store *previous;
+
+    if (strcmp(path, chat->session_path) == 0) {
+        if (!replace_messages(chat, items, error)) {
+            return false;
+        }
+        return checkpoint_messages(chat, error);
+    }
+    store = telos_jsonl_store_create(path, error);
+    if (store == NULL) {
+        return false;
+    }
+    if (!replace_messages(chat, items, error)) {
+        telos_event_store_destroy(store);
+        return false;
+    }
+    previous = chat->session_store;
+    chat->session_store = store;
+    chat->session_id = identifier;
+    chat->session_sequence = telos_event_store_count(store);
+    memcpy(chat->session_path, path, strlen(path) + 1);
+    telos_event_store_destroy(previous);
+    return checkpoint_messages(chat, error);
 }
 
 static bool tree_command(const char *arguments,
@@ -1774,12 +2825,9 @@ static bool fork_command(const char *arguments,
     if (!checkpoint_messages(chat, error)) {
         return false;
     }
-    if (strlen(name) >= sizeof(chat->session_name)) {
-        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
-                  "Fork name is too long");
+    if (!set_session_name(chat, name, true, error)) {
         return false;
     }
-    memcpy(chat->session_name, name, strlen(name) + 1);
     return emit_notice(emit, emit_context, "session fork checkpoint saved",
                        error);
 }
@@ -1793,25 +2841,50 @@ static bool resume_command(const char *arguments,
 {
     struct chat_session *chat = context;
     struct telos_value *items = NULL;
+    char path[CHAT_PATH_SIZE];
+    struct telos_id identifier;
+    char loaded_name[CHAT_SESSION_NAME_SIZE] = {0};
+    bool persisted;
     bool result;
 
     (void)cancel;
     if (arguments != NULL && arguments[0] != '\0') {
-        items = read_session_file(arguments, error);
+        if (!resolve_resume_path(chat, arguments, path, sizeof(path), error)) {
+            return false;
+        }
+        items = read_session_file(path, loaded_name, sizeof(loaded_name), error);
         if (items == NULL) {
             return false;
         }
-        result = replace_messages(chat, items, error);
+        persisted = session_path_identifier(chat, path, &identifier);
+        if (persisted) {
+            result = switch_persisted_session(chat, path, identifier, items,
+                                              error);
+        } else {
+            result = replace_messages(chat, items, error);
+        }
+        if (!result) {
+            telos_value_release(items);
+            return false;
+        }
+        if (!set_session_name(chat, loaded_name, false, error) ||
+            !ensure_session_name(chat, items, NULL, persisted, error)) {
+            telos_value_release(items);
+            return false;
+        }
         telos_value_release(items);
-        if (!result || !persist_session_snapshot(chat, error) ||
-            !checkpoint_messages(chat, error)) {
+        if (!persisted &&
+            (!persist_session_snapshot(chat, error) ||
+             !checkpoint_messages(chat, error))) {
             return false;
         }
         return emit_notice(emit, emit_context, "session resumed", error);
     }
     if (chat->checkpoint_count == 0) {
-        return emit_notice(emit, emit_context, "no session checkpoint exists",
-                           error);
+        return emit_notice(
+            emit, emit_context,
+            "no session checkpoint exists; use /sessions then /resume SESSION",
+            error);
     }
     restore_checkpoint(chat);
     return emit_notice(emit, emit_context, "session checkpoint resumed", error);
@@ -1877,6 +2950,7 @@ static bool import_command(const char *arguments,
 {
     struct chat_session *chat = context;
     struct telos_value *items;
+    char loaded_name[CHAT_SESSION_NAME_SIZE] = {0};
     bool result;
 
     (void)cancel;
@@ -1885,11 +2959,18 @@ static bool import_command(const char *arguments,
                   "Usage: /import PATH");
         return false;
     }
-    items = read_session_file(arguments, error);
+    items = read_session_file(arguments, loaded_name, sizeof(loaded_name),
+                              error);
     if (items == NULL) {
         return false;
     }
     result = replace_messages(chat, items, error);
+    if (result && !set_session_name(chat, loaded_name, false, error)) {
+        result = false;
+    }
+    if (result && !ensure_session_name(chat, items, NULL, false, error)) {
+        result = false;
+    }
     telos_value_release(items);
     if (!result || !persist_session_snapshot(chat, error)) {
         return false;
@@ -1910,12 +2991,52 @@ static bool settings_command(const char *arguments,
     (void)arguments;
     (void)cancel;
     if (snprintf(message, sizeof(message),
-                 "provider=%s model=%s thinking=%s endpoint=%s",
+                 "provider=%s model=%s thinking=%s endpoint=%s status=%s",
                  chat_provider_get(chat), chat_model_get(chat),
-                 chat->thinking_level, chat->configured_endpoint) >=
+                 chat->thinking_level, chat->configured_endpoint,
+                 chat->status_spec) >=
         (int)sizeof(message)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                   "Settings summary is too long");
+        return false;
+    }
+    return emit_notice(emit, emit_context, message, error);
+}
+
+static bool status_command(const char *arguments,
+                           const struct telos_cancel *cancel,
+                           telos_frontend_emit_fn emit,
+                           void *emit_context,
+                           void *context,
+                           struct telos_error **error)
+{
+    struct chat_session *chat = context;
+    char canonical[CHAT_STATUS_SPEC_SIZE];
+    char message[CHAT_STATUS_SPEC_SIZE + 32];
+    unsigned int fields;
+
+    (void)cancel;
+    if (arguments == NULL || arguments[0] == '\0') {
+        if (snprintf(message, sizeof(message), "status=%s",
+                     chat->status_spec) >= (int)sizeof(message)) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                      "Status summary is too long");
+            return false;
+        }
+        return emit_notice(emit, emit_context, message, error);
+    }
+    if (!parse_status_spec(arguments, &fields, canonical, sizeof(canonical),
+                           error) ||
+        !telos_config_persist(chat->config, "agent.status", canonical,
+                              error)) {
+        return false;
+    }
+    chat->frontend_status.fields = fields;
+    memcpy(chat->status_spec, canonical, strlen(canonical) + 1);
+    if (snprintf(message, sizeof(message), "Status fields set to %s",
+                 chat->status_spec) >= (int)sizeof(message)) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                  "Status confirmation is too long");
         return false;
     }
     return emit_notice(emit, emit_context, message, error);
@@ -2043,12 +3164,14 @@ static bool set_thinking_options(struct chat_session *chat,
     }
 }
 
-static bool thinking_command(const char *arguments,
-                             const struct telos_cancel *cancel,
-                             telos_frontend_emit_fn emit,
-                             void *emit_context,
-                             void *context,
-                             struct telos_error **error)
+static bool thinking_command_named(const char *arguments,
+                                   const struct telos_cancel *cancel,
+                                   telos_frontend_emit_fn emit,
+                                   void *emit_context,
+                                   void *context,
+                                   const char *status_name,
+                                   const char *display_name,
+                                   struct telos_error **error)
 {
     struct chat_session *chat = context;
     char level[CHAT_THINKING_LEVEL_SIZE];
@@ -2056,7 +3179,7 @@ static bool thinking_command(const char *arguments,
 
     (void)cancel;
     if (arguments == NULL || arguments[0] == '\0') {
-        if (snprintf(message, sizeof(message), "thinking=%s",
+        if (snprintf(message, sizeof(message), "%s=%s", status_name,
                      chat->thinking_level) >= (int)sizeof(message)) {
             set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                       "Thinking status is too long");
@@ -2076,13 +3199,29 @@ static bool thinking_command(const char *arguments,
     }
     memset(chat->thinking_level, 0, sizeof(chat->thinking_level));
     memcpy(chat->thinking_level, level, strlen(level) + 1);
-    if (snprintf(message, sizeof(message), "Thinking level set to %s", level) >=
-        (int)sizeof(message)) {
+    if (!telos_config_persist(chat->config, "agent.thinking",
+                              chat->thinking_level, error)) {
+        return false;
+    }
+    if (snprintf(message, sizeof(message), "%s set to %s", display_name,
+                 level) >= (int)sizeof(message)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                   "Thinking status is too long");
         return false;
     }
     return emit_notice(emit, emit_context, message, error);
+}
+
+static bool thinking_command(const char *arguments,
+                             const struct telos_cancel *cancel,
+                             telos_frontend_emit_fn emit,
+                             void *emit_context,
+                             void *context,
+                             struct telos_error **error)
+{
+    return thinking_command_named(arguments, cancel, emit, emit_context,
+                                  context, "thinking", "Thinking level",
+                                  error);
 }
 
 static bool reload_command(const char *arguments,
@@ -2162,6 +3301,7 @@ static bool model_command(const char *arguments,
     struct model_list_context list = {0};
     char spec[TELOS_COMMAND_ARGUMENT_SIZE];
     char message[TELOS_COMMAND_ARGUMENT_SIZE];
+    char persisted_model[TELOS_COMMAND_ARGUMENT_SIZE];
     const struct telos_model_descriptor *model;
     struct telos_error *selection_error = NULL;
 
@@ -2228,7 +3368,7 @@ static bool model_command(const char *arguments,
             }
             memcpy(provider_name, spec, provider_size);
             provider_name[provider_size] = '\0';
-            provider = canonical_provider(provider_name);
+            provider = model_provider_for(provider_name);
             model_id = separator + 1;
         }
         if (provider == NULL || provider[0] == '\0') {
@@ -2236,33 +3376,41 @@ static bool model_command(const char *arguments,
                       "A Provider is required for a custom model");
             return false;
         }
-        provider = canonical_provider(provider);
-        if (strcmp(provider, "openai") != 0 &&
-            strcmp(provider, "deepseek") != 0 &&
-            strcmp(provider, "zai") != 0 &&
-            strcmp(provider, "anthropic") != 0) {
+        provider = model_provider_for(provider);
+        if (provider == NULL) {
             set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, ENOTSUP,
                       "The selected Provider Plugin is not available");
             return false;
         }
-        if (strlen(model_id) >= CHAT_MODEL_ID_SIZE ||
-            chat->model_catalog.count >= TELOS_MODEL_CATALOG_CAPACITY) {
+        model_id = migrate_model_id(provider, model_id);
+        if (strlen(model_id) >= CHAT_MODEL_ID_SIZE) {
             set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
                       "Custom model identifier is too long");
             return false;
         }
-        memcpy(chat->model_storage[chat->model_catalog.count], model_id,
-               strlen(model_id) + 1);
-        custom = (struct telos_model_descriptor){
-            .provider = provider,
-            .id = chat->model_storage[chat->model_catalog.count],
-            .name = chat->model_storage[chat->model_catalog.count],
-            .api = model_api_for_provider(provider),
-            .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
-                            TELOS_MODEL_CAPABILITY_TOOLS,
-        };
-        if (!telos_model_catalog_add(&chat->model_catalog, &custom, error) ||
-            !telos_model_catalog_select(&chat->model_catalog, provider,
+        if (telos_model_catalog_find(&chat->model_catalog, provider, model_id) ==
+            NULL) {
+            if (chat->model_catalog.count >= TELOS_MODEL_CATALOG_CAPACITY) {
+                set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
+                          "Custom model identifier is too long");
+                return false;
+            }
+            memcpy(chat->model_storage[chat->model_catalog.count], model_id,
+                   strlen(model_id) + 1);
+            custom = (struct telos_model_descriptor){
+                .provider = provider,
+                .id = chat->model_storage[chat->model_catalog.count],
+                .name = chat->model_storage[chat->model_catalog.count],
+                .api = model_api_for_provider(provider),
+                .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                                TELOS_MODEL_CAPABILITY_TOOLS,
+            };
+            if (!telos_model_catalog_add(&chat->model_catalog, &custom,
+                                         error)) {
+                return false;
+            }
+        }
+        if (!telos_model_catalog_select(&chat->model_catalog, provider,
                                         model_id, error)) {
             return false;
         }
@@ -2295,6 +3443,14 @@ static bool model_command(const char *arguments,
         !create_provider(chat, error)) {
         return false;
     }
+    if (snprintf(persisted_model, sizeof(persisted_model), "%s/%s",
+                 model->provider, model->id) >= (int)sizeof(persisted_model) ||
+        !telos_config_persist(chat->config, "agent.model", persisted_model,
+                              error) ||
+        !telos_config_persist(chat->config, "agent.thinking",
+                              chat->thinking_level, error)) {
+        return false;
+    }
     if (snprintf(message, sizeof(message), "Model set to %s/%s",
                  model->provider, model->id) >= (int)sizeof(message)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, E2BIG,
@@ -2303,6 +3459,64 @@ static bool model_command(const char *arguments,
     }
     return emit_frontend(&observer, TELOS_FRONTEND_NOTICE, message, NULL,
                          error);
+}
+
+static bool setting_command(const char *arguments,
+                            const struct telos_cancel *cancel,
+                            telos_frontend_emit_fn emit,
+                            void *emit_context,
+                            void *context,
+                            struct telos_error **error)
+{
+    char specification[TELOS_COMMAND_ARGUMENT_SIZE];
+    char *value;
+    char *separator;
+
+    if (arguments == NULL || arguments[0] == '\0') {
+        return settings_command(arguments, cancel, emit, emit_context,
+                                context, error);
+    }
+    if (!copy_trimmed(arguments, specification, sizeof(specification), error)) {
+        return false;
+    }
+    separator = strpbrk(specification, " \t");
+    if (separator == NULL) {
+        separator = specification + strlen(specification);
+    } else {
+        *separator = '\0';
+        value = separator + 1;
+        while (*value == ' ' || *value == '\t') {
+            ++value;
+        }
+        if (strcmp(specification, "model") == 0) {
+            return model_command(value, cancel, emit, emit_context, context,
+                                 error);
+        }
+        if (strcmp(specification, "thinking") == 0) {
+            return thinking_command(value, cancel, emit, emit_context,
+                                    context, error);
+        }
+        if (strcmp(specification, "status") == 0) {
+            return status_command(value, cancel, emit, emit_context, context,
+                                  error);
+        }
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Usage: /setting [model MODEL|thinking LEVEL|status FIELDS]");
+        return false;
+    }
+    if (strcmp(specification, "model") == 0) {
+        return model_command("", cancel, emit, emit_context, context, error);
+    }
+    if (strcmp(specification, "thinking") == 0) {
+        return thinking_command("", cancel, emit, emit_context, context,
+                                error);
+    }
+    if (strcmp(specification, "status") == 0) {
+        return status_command("", cancel, emit, emit_context, context, error);
+    }
+    set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+              "Usage: /setting [model MODEL|thinking LEVEL|status FIELDS]");
+    return false;
 }
 
 static bool scoped_models_command(const char *arguments,
@@ -2429,11 +3643,57 @@ static bool login_status_command_handler(const char *arguments,
     return result;
 }
 
+struct chat_steer_context {
+    struct chat_session *chat;
+    const struct telos_frontend_steer *frontend;
+};
+
+static struct telos_value *chat_agent_steer(
+    void *context, const char *assistant_text, struct telos_error **error)
+{
+    struct chat_steer_context *steer_context = context;
+    struct chat_session *chat;
+    struct telos_value *message;
+    char *text;
+
+    if (steer_context == NULL || steer_context->chat == NULL ||
+        steer_context->frontend == NULL || steer_context->frontend->next == NULL) {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Agent steer context is invalid");
+        return NULL;
+    }
+    chat = steer_context->chat;
+    text = steer_context->frontend->next(steer_context->frontend->context,
+                                         error);
+    if (text == NULL) {
+        return NULL;
+    }
+    message = create_message("user", text, error);
+    if (message == NULL) {
+        free(text);
+        return NULL;
+    }
+    if ((assistant_text != NULL &&
+         !append_message(chat, "assistant", assistant_text, error)) ||
+        !append_message_value(chat, message, strlen(text), error)) {
+        telos_value_release(message);
+        free(text);
+        return NULL;
+    }
+    free(text);
+    return message;
+}
+
 static bool chat_turn(const char *input, const struct telos_cancel *cancel,
                       telos_frontend_emit_fn emit, void *emit_context,
+                      const struct telos_frontend_steer *steer,
                       void *turn_context, struct telos_error **error)
 {
     struct chat_session *chat = turn_context;
+    struct chat_steer_context steer_context = {
+        .chat = chat,
+        .frontend = steer,
+    };
     struct observer_context observer = {
         .emit = emit,
         .emit_context = emit_context,
@@ -2446,6 +3706,9 @@ static bool chat_turn(const char *input, const struct telos_cancel *cancel,
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
                   "Set agent.model or TELOS_AGENT_MODEL before sending "
                   "a prompt");
+        return false;
+    }
+    if (!ensure_session_name(chat, NULL, input, true, error)) {
         return false;
     }
     if (!append_message(chat, "user", input, error)) {
@@ -2474,6 +3737,8 @@ static bool chat_turn(const char *input, const struct telos_cancel *cancel,
             .provider_context = chat->provider_context,
             .observe = observe_agent,
             .observe_context = &observer,
+            .steer = steer == NULL ? NULL : chat_agent_steer,
+            .steer_context = &steer_context,
             .maximum_provider_rounds = 8,
             .maximum_response_bytes = CHAT_MAXIMUM_RESPONSE_BYTES,
         };
@@ -2519,6 +3784,12 @@ static bool register_chat_commands(struct chat_session *chat,
             .context = chat,
         },
         {
+            .name = "status",
+            .help = "show or configure the footer status fields",
+            .run = status_command,
+            .context = chat,
+        },
+        {
             .name = "scoped-models",
             .help = "list models available to this session",
             .run = scoped_models_command,
@@ -2527,6 +3798,12 @@ static bool register_chat_commands(struct chat_session *chat,
         {
             .name = "name",
             .help = "show or set the session name",
+            .run = name_command,
+            .context = chat,
+        },
+        {
+            .name = "rename",
+            .help = "rename the current session",
             .run = name_command,
             .context = chat,
         },
@@ -2568,7 +3845,7 @@ static bool register_chat_commands(struct chat_session *chat,
         },
         {
             .name = "resume",
-            .help = "resume a checkpoint or exported session file",
+            .help = "resume a saved session, checkpoint, or exported file",
             .run = resume_command,
             .context = chat,
         },
@@ -2593,7 +3870,13 @@ static bool register_chat_commands(struct chat_session *chat,
         {
             .name = "settings",
             .help = "show current provider settings",
-            .run = settings_command,
+            .run = setting_command,
+            .context = chat,
+        },
+        {
+            .name = "setting",
+            .help = "show or set common settings",
+            .run = setting_command,
             .context = chat,
         },
         {
@@ -2608,7 +3891,7 @@ static bool register_chat_commands(struct chat_session *chat,
             .run = static_notice_command,
             .context =
                 "Enter submits · Ctrl+J or Alt+Enter adds a line · Esc cancels · "
-                "Ctrl+G opens $EDITOR",
+                "Ctrl+G opens $EDITOR · Ctrl+O toggles the tool panel",
         },
         {
             .name = "changelog",
@@ -2665,19 +3948,48 @@ static bool select_configured_model(struct chat_session *chat,
                                     const char *model,
                                     struct telos_error **error)
 {
-    const char *provider = canonical_provider(provider_name);
+    const char *provider = model_provider_for(provider_name);
+    const char *model_id = model;
+    char provider_storage[64];
+    const char *separator;
 
     chat->configured_provider = provider;
     if (model == NULL || model[0] == '\0' || strcmp(model, "unconfigured") ==
                                                0) {
         return true;
     }
-    if (telos_model_catalog_find(&chat->model_catalog, provider, model) ==
+    separator = strchr(model, '/');
+    if (separator != NULL) {
+        size_t provider_size = (size_t)(separator - model);
+
+        if (provider_size > 0 && provider_size < sizeof(provider_storage)) {
+            memcpy(provider_storage, model, provider_size);
+            provider_storage[provider_size] = '\0';
+            {
+                const char *candidate =
+                    model_provider_for(provider_storage);
+
+                if (model_provider_supported(candidate)) {
+                    provider = candidate;
+                    model_id = separator + 1;
+                }
+            }
+        }
+    }
+    model_id = migrate_model_id(provider, model_id);
+    if (provider == NULL || !model_provider_supported(provider) ||
+        model_id[0] == '\0') {
+        set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                  "Configured model selection is invalid");
+        return false;
+    }
+    chat->configured_provider = provider;
+    if (telos_model_catalog_find(&chat->model_catalog, provider, model_id) ==
         NULL) {
         const struct telos_model_descriptor custom = {
             .provider = provider,
-            .id = model,
-            .name = model,
+            .id = model_id,
+            .name = model_id,
             .api = strcmp(provider, "openai") == 0
                        ? TELOS_MODEL_API_OPENAI_RESPONSES
                        : (strcmp(provider, "anthropic") == 0
@@ -2691,12 +4003,14 @@ static bool select_configured_model(struct chat_session *chat,
             return false;
         }
     }
-    if (!telos_model_catalog_select(&chat->model_catalog, provider, model,
+    if (!telos_model_catalog_select(&chat->model_catalog, provider, model_id,
                                     error)) {
         return false;
     }
     chat->selected_model = telos_model_catalog_current(&chat->model_catalog);
-    chat->model = chat->selected_model->id;
+    chat->model = chat->selected_model->variant_of == NULL
+                      ? chat->selected_model->id
+                      : chat->selected_model->variant_of;
     return true;
 }
 
@@ -2710,11 +4024,14 @@ static bool initialize_chat(struct chat_session *chat,
     const char *model = telos_config_get(config, "agent.model");
     const char *endpoint = telos_config_get(config, "agent.endpoint");
     const char *thinking = telos_config_get(config, "agent.thinking");
+    const char *status = telos_config_get(config, "agent.status");
     const char *authentication_endpoint =
         getenv("TELOS_OPENAI_AUTH_ENDPOINT");
+    unsigned int status_fields;
 
     chat->home_directory = home_directory;
     chat->current_directory = current_directory;
+    chat->config = config;
     if (thinking == NULL || !thinking_level_valid(thinking) ||
         strlen(thinking) >= sizeof(chat->thinking_level)) {
         set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
@@ -2722,6 +4039,26 @@ static bool initialize_chat(struct chat_session *chat,
         return false;
     }
     memcpy(chat->thinking_level, thinking, strlen(thinking) + 1);
+    if (status == NULL ||
+        !parse_status_spec(status, &status_fields, chat->status_spec,
+                           sizeof(chat->status_spec), error)) {
+        if (error != NULL && *error == NULL) {
+            set_error(error, TELOS_ERROR_DOMAIN_ARGUMENT, EINVAL,
+                      "Agent status fields are invalid");
+        }
+        return false;
+    }
+    chat->frontend_status = (struct telos_frontend_status){
+        .fields = status_fields,
+        .thinking_get = chat_thinking_get,
+        .branch_get = chat_branch_get,
+        .context_used_get = chat_context_used_get,
+        .context_window_get = chat_context_window_get,
+        .home_directory = home_directory,
+        .context = chat,
+    };
+    discover_git_branch(current_directory, chat->git_branch,
+                        sizeof(chat->git_branch));
     if (!initialize_session_store(chat, home_directory, error)) {
         return false;
     }
@@ -2815,9 +4152,19 @@ static bool initialize_chat(struct chat_session *chat,
                   "Agent Provider options allocation failed");
         return false;
     }
-    if (chat->selected_model != NULL &&
-        !set_thinking_options(chat, chat->thinking_level, error)) {
-        return false;
+    if (chat->selected_model != NULL) {
+        const char *level = chat->thinking_level;
+
+        if ((chat->selected_model->capabilities &
+             TELOS_MODEL_CAPABILITY_REASONING) == 0) {
+            level = "off";
+        }
+        if (!set_thinking_options(chat, level, error)) {
+            return false;
+        }
+        if (strcmp(level, chat->thinking_level) != 0) {
+            memcpy(chat->thinking_level, level, strlen(level) + 1);
+        }
     }
     return create_prompt(chat, home_directory, current_directory, error);
 }
@@ -2891,9 +4238,15 @@ bool telos_chat_run(const struct telos_config *config,
             .model = model,
             .working_directory = current_directory,
             .command_help =
-                "/model  select model · /login-status  show auth status",
+                "/model  select model · /thinking  set reasoning level · "
+                "/setting  show or set common settings",
             .initial_prompt = initial_prompt,
             .commands = &chat.commands,
+            .completion_count = session_completion_count,
+            .completion_at = session_completion_at,
+            .completion_context = &chat,
+            .model_catalog = &chat.model_catalog,
+            .status = &chat.frontend_status,
             .provider_get = chat_provider_get,
             .model_get = chat_model_get,
             .identity_context = &chat,
