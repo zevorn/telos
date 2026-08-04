@@ -5,61 +5,80 @@
 static const struct telos_model_descriptor models[] = {
     {
         .provider = "openai",
-        .id = "gpt-5",
-        .name = "GPT-5",
+        .id = "gpt-5.6-sol",
+        .name = "GPT-5.6 Sol",
+        .reasoning = "xhigh",
         .api = TELOS_MODEL_API_OPENAI_RESPONSES,
         .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
                         TELOS_MODEL_CAPABILITY_TOOLS |
                         TELOS_MODEL_CAPABILITY_REASONING,
+        .context_window = 258000,
     },
     {
         .provider = "openai",
-        .id = "gpt-5/sol",
-        .name = "GPT-5 Sol",
-        .variant_of = "gpt-5",
-        .reasoning = "high",
-        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
-        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
-                        TELOS_MODEL_CAPABILITY_TOOLS |
-                        TELOS_MODEL_CAPABILITY_REASONING,
-    },
-    {
-        .provider = "openai",
-        .id = "gpt-5/terra",
-        .name = "GPT-5 Terra",
-        .variant_of = "gpt-5",
-        .reasoning = "medium",
-        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
-        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
-                        TELOS_MODEL_CAPABILITY_TOOLS |
-                        TELOS_MODEL_CAPABILITY_REASONING,
-    },
-    {
-        .provider = "openai",
-        .id = "gpt-5/luna",
-        .name = "GPT-5 Luna",
-        .variant_of = "gpt-5",
+        .id = "gpt-5.6-luna",
+        .name = "GPT-5.6 Luna",
         .reasoning = "low",
         .api = TELOS_MODEL_API_OPENAI_RESPONSES,
         .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
                         TELOS_MODEL_CAPABILITY_TOOLS |
                         TELOS_MODEL_CAPABILITY_REASONING,
+        .context_window = 258000,
     },
     {
         .provider = "openai",
-        .id = "gpt-5-mini",
-        .name = "GPT-5 Mini",
+        .id = "gpt-5.6-terra",
+        .name = "GPT-5.6 Terra",
+        .reasoning = "medium",
         .api = TELOS_MODEL_API_OPENAI_RESPONSES,
         .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
-                        TELOS_MODEL_CAPABILITY_TOOLS,
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+        .context_window = 258000,
     },
     {
         .provider = "openai",
-        .id = "gpt-4.1",
-        .name = "GPT-4.1",
+        .id = "gpt-5.5",
+        .name = "GPT-5.5",
+        .reasoning = "medium",
         .api = TELOS_MODEL_API_OPENAI_RESPONSES,
         .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
-                        TELOS_MODEL_CAPABILITY_TOOLS,
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+        .context_window = 258000,
+    },
+    {
+        .provider = "openai",
+        .id = "gpt-5.4",
+        .name = "GPT-5.4",
+        .reasoning = "medium",
+        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
+        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+        .context_window = 258000,
+    },
+    {
+        .provider = "openai",
+        .id = "gpt-5.4-mini",
+        .name = "GPT-5.4 Mini",
+        .reasoning = "medium",
+        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
+        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+        .context_window = 258000,
+    },
+    {
+        .provider = "openai",
+        .id = "gpt-5.3-codex-spark",
+        .name = "GPT-5.3 Codex Spark",
+        .reasoning = "high",
+        .api = TELOS_MODEL_API_OPENAI_RESPONSES,
+        .capabilities = TELOS_MODEL_CAPABILITY_STREAMING |
+                        TELOS_MODEL_CAPABILITY_TOOLS |
+                        TELOS_MODEL_CAPABILITY_REASONING,
+        .context_window = 258000,
     },
     {
         .provider = "deepseek",

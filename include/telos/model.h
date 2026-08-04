@@ -26,7 +26,7 @@ struct telos_model_descriptor {
     /*
      * Parent model id when this entry is a selectable variant, or NULL for
      * a family (top-level) model. A variant id keeps the form
-     * FAMILY/VARIANT, for example "gpt-5/sol".
+     * FAMILY/VARIANT, for example "family/fast".
      */
     const char *variant_of;
     /*

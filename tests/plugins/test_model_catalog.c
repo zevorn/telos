@@ -26,13 +26,21 @@ int main(void)
     assert(error == NULL);
     assert(telos_model_catalog_visit(&catalog, count_model, &count, &error));
     assert(error == NULL);
-    assert(count >= 8);
-    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5") != NULL);
-    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5/sol") !=
+    assert(count >= 11);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5.6-sol") !=
            NULL);
-    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5/terra") !=
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5.6-luna") !=
            NULL);
-    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5/luna") !=
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5.6-terra") !=
+           NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5.5") != NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5.4") != NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5.4-mini") !=
+           NULL);
+    assert(telos_model_catalog_find(&catalog, "openai",
+                                    "gpt-5.3-codex-spark") != NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5") == NULL);
+    assert(telos_model_catalog_find(&catalog, "openai", "gpt-5/luna") ==
            NULL);
     assert(telos_model_catalog_find(&catalog, "deepseek",
                                     "deepseek-reasoner") != NULL);

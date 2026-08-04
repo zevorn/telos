@@ -353,7 +353,7 @@ int main(int argc, char **argv)
         telos_model_catalog_initialize(&models);
         assert(definition->add(&models, NULL));
         assert(telos_model_catalog_current(&models) == NULL);
-        assert(telos_model_catalog_find(&models, "openai", "gpt-5") !=
+        assert(telos_model_catalog_find(&models, "openai", "gpt-5.5") !=
                NULL);
     }
     if (plugin_count > 13) {
