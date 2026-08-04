@@ -122,6 +122,29 @@ test(
     timeout: 30,
 )
 
+soak_probe = executable(
+    'soak',
+    'soak.c',
+    dependencies: [
+        telos_core_dep,
+        telos_memory_store_plugin_dep,
+    ],
+    include_directories: inc_public,
+)
+
+test(
+    'soak-bounded',
+    test_shell,
+    args: [
+        meson.current_source_dir() / '..' / '..' / 'tools' / 'memory_audit.sh',
+        soak_probe.full_path(),
+        '3000',
+    ],
+    depends: soak_probe,
+    suite: 'functional',
+    timeout: 120,
+)
+
 if tui_frontend_available and curl_transport_available
     test_agent_server = executable(
         'test-agent-server',
