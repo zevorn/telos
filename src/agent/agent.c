@@ -265,6 +265,22 @@ static void *execute_tool(void *context)
             telos_error_create(TELOS_ERROR_DOMAIN_PLUGIN, EIO,
                                "Tool failed without an error", NULL);
     }
+    /*
+     * Convert a tool failure into a structured result so the model can
+     * see the error and adapt.  The error stays for observer reporting;
+     * without this, any tool error terminates the turn immediately and
+     * the model never learns why its call failed.
+     */
+    if (worker->call->error != NULL && worker->call->result == NULL) {
+        const char *msg = telos_error_message(worker->call->error);
+        const char *keys[] = {"error"};
+        struct telos_value *error_val = telos_value_new_string(msg);
+        const struct telos_value *values[] = {error_val};
+
+        worker->call->result =
+            telos_value_new_object(keys, values, 1);
+        telos_value_release(error_val);
+    }
     return NULL;
 }
 
@@ -360,11 +376,8 @@ static bool run_tools(const struct telos_agent_options *options,
                 }
             }
             if (collector->calls[index].error != NULL) {
-                if (error != NULL) {
-                    *error = telos_error_retain(collector->calls[index].error);
-                }
-                result = false;
-                break;
+                /* Non-fatal: execute_tool() produced an {"error":...}
+                 * result so the model sees the failure and can adapt. */
             }
         }
     }

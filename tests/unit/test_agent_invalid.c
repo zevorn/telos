@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdio.h>
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
@@ -402,12 +403,22 @@ int main(void)
                             &options, &request, TELOS_ERROR_DOMAIN_PROTOCOL);
     assert_dispatch_failure(DISPATCH_FALSE_ERROR, TELOS_PROVIDER_STATE_LOCAL,
                             &options, &request, TELOS_ERROR_DOMAIN_IO);
+    /*
+     * DISPATCH_MISSING_TOOL: the lookup failure is converted to a
+     * {"error":...} result and the turn continues; the fixture keeps
+     * emitting the same call, so the agent hits the round limit.
+     */
     assert_dispatch_failure(DISPATCH_MISSING_TOOL, TELOS_PROVIDER_STATE_LOCAL,
-                            &options, &request, TELOS_ERROR_DOMAIN_ARGUMENT);
+                            &options, &request, TELOS_ERROR_DOMAIN_STATE);
     assert_dispatch_failure(DISPATCH_SILENT_TOOL, TELOS_PROVIDER_STATE_LOCAL,
                             &options, &request, TELOS_ERROR_DOMAIN_STATE);
+    /*
+     * DISPATCH_ERROR_TOOL: the tool error is now converted to a result
+     * and the turn continues.  The fixture emits the same failing tool
+     * call every round, so the agent exhausts its provider round limit.
+     */
     assert_dispatch_failure(DISPATCH_ERROR_TOOL, TELOS_PROVIDER_STATE_LOCAL,
-                            &options, &request, TELOS_ERROR_DOMAIN_PLUGIN);
+                            &options, &request, TELOS_ERROR_DOMAIN_STATE);
     assert_dispatch_failure(DISPATCH_REMOTE_NO_ID, TELOS_PROVIDER_STATE_REMOTE,
                             &options, &request, TELOS_ERROR_DOMAIN_PROTOCOL);
     assert_dispatch_failure(DISPATCH_ENDLESS_TOOL, TELOS_PROVIDER_STATE_LOCAL,
