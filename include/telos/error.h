@@ -32,4 +32,14 @@ const char *telos_error_message(const struct telos_error *error);
 
 const struct telos_error *telos_error_cause(const struct telos_error *error);
 
+
+/*
+ * Conditionally create and assign an error.  Does nothing when error is
+ * NULL or already holds an error (preserves the first error).
+ */
+void telos_error_set(struct telos_error **error,
+                     enum telos_error_domain domain,
+                     int code,
+                     const char *message);
+
 #endif

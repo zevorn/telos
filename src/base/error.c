@@ -107,3 +107,14 @@ const struct telos_error *telos_error_cause(const struct telos_error *error)
 
     return error->cause;
 }
+
+void telos_error_set(struct telos_error **error,
+                     enum telos_error_domain domain,
+                     int code,
+                     const char *message)
+{
+    if (error != NULL && *error == NULL) {
+        *error = telos_error_create(domain, code, message, NULL);
+    }
+}
+
