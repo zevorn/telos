@@ -1,1 +1,1 @@
-# TUI plugin subdirectories are added with each plugin.
+subdir('git-branch-status')
