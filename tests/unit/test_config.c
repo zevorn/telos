@@ -76,6 +76,19 @@ int main(void)
     assert(!telos_config_override(config, "unknown.key", "x", &error));
     assert(error != NULL);
     telos_error_release(error);
+    error = NULL;
+    assert(telos_config_persist(config, "agent.model", "persisted-model",
+                                &error));
+    assert(error == NULL);
+    telos_config_destroy(config);
+
+    config = telos_config_load(home, project, &error);
+    assert(config != NULL);
+    assert(error == NULL);
+    assert(strcmp(telos_config_get(config, "agent.model"),
+                  "persisted-model") == 0);
+    assert(strcmp(telos_config_get(config, "agent.provider"),
+                  "environment-provider") == 0);
     telos_config_destroy(config);
 
     unsetenv("TELOS_AGENT_PROVIDER");

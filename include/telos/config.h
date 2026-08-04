@@ -29,6 +29,12 @@ bool telos_config_override(struct telos_config *config,
 const char *telos_config_get(const struct telos_config *config,
                              const char *key);
 
+/* Persist an Agent default in the user's ~/.telos/config.toml. */
+bool telos_config_persist(const struct telos_config *config,
+                          const char *key,
+                          const char *value,
+                          struct telos_error **error);
+
 enum telos_config_origin
 telos_config_get_origin(const struct telos_config *config, const char *key);
 
