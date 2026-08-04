@@ -57,7 +57,7 @@ tests = ["sdk-contract", "manifest-lock", "manifest-invalid"]
 external = []
 
 [criteria.AC-14]
-tests = ["cli-functional", "config-precedence", "config-invalid", "telos-build-help", "terminal-frontend", "terminal-tui", "agent-chat"]
+tests = ["cli-functional", "config-precedence", "config-invalid", "telos-build-help", "tui-frontend", "terminal-tui", "agent-chat"]
 external = ["zephyr-shell"]
 
 [criteria.AC-15]

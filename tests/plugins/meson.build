@@ -292,28 +292,28 @@ if posix_host_plugins_available
     )
 endif
 
-if terminal_frontend_available
-    test_terminal_frontend = executable(
-        'test-terminal-frontend',
-        'test_terminal_frontend.c',
-        dependencies: telos_terminal_frontend_plugin_dep,
+if tui_frontend_available
+    test_tui_frontend = executable(
+        'test-tui-frontend',
+        'test_tui_frontend.c',
+        dependencies: telos_tui_frontend_plugin_dep,
     )
 
     test(
-        'terminal-frontend',
-        test_terminal_frontend,
+        'tui-frontend',
+        test_tui_frontend,
         suite: 'plugins',
     )
 
-    test_terminal_tui = executable(
-        'test-terminal-tui',
-        'test_terminal_tui.c',
-        dependencies: telos_terminal_frontend_plugin_dep,
+    test_tui = executable(
+        'test-tui',
+        'test_tui.c',
+        dependencies: telos_tui_frontend_plugin_dep,
     )
 
     test(
-        'terminal-tui',
-        test_terminal_tui,
+        'tui',
+        test_tui,
         suite: 'plugins',
         is_parallel: false,
         timeout: 10,
@@ -464,13 +464,13 @@ if get_option('shared_plugins')
                 / 'plugins/authentication/openai-codex',
         ]
     endif
-    if terminal_frontend_available
-        official_plugin_modules += [telos_terminal_frontend_module]
+    if tui_frontend_available
+        official_plugin_modules += [telos_tui_frontend_module]
         official_plugin_module_paths += [
-            telos_terminal_frontend_module.full_path(),
+            telos_tui_frontend_module.full_path(),
         ]
         official_plugin_source_paths += [
-            meson.project_source_root() / 'plugins/frontends/terminal',
+            meson.project_source_root() / 'plugins/frontends/tui',
         ]
     endif
     if curl_transport_available

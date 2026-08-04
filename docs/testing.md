@@ -89,7 +89,7 @@ least 90% line coverage and 80% branch coverage. The
 `allocation-failure-matrix` test injects failures into every observed
 `malloc`, `calloc`, and `realloc` call for the public subsystems it exercises.
 
-When libcurl is available, `terminal-frontend`, `terminal-tui`,
+When libcurl is available, `tui-frontend`, `terminal-tui`,
 `curl-transport`, `agent-chat`, and `agent-chat-oauth` cover plain pipes, a
 real pseudoterminal, cancellation validation, OpenAI device login, credential
 headers, and end-to-end local streaming Responses requests. The OAuth fixture

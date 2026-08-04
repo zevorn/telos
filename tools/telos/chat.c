@@ -29,7 +29,7 @@
 #include <telos/plugins/openai_responses.h>
 #include <telos/plugins/project_guidance.h>
 #include <telos/plugins/posix_tools.h>
-#include <telos/plugins/terminal_frontend.h>
+#include <telos/plugins/tui_frontend.h>
 #include <telos/prompt.h>
 #include <telos/registry.h>
 #include <telos/secret.h>
@@ -4254,7 +4254,7 @@ bool telos_chat_run(const struct telos_config *config,
             .turn = chat_turn,
             .turn_context = &chat,
         };
-        const struct telos_terminal_frontend_config frontend = {
+        const struct telos_tui_frontend_config frontend = {
             .session = &session,
             .input_descriptor = STDIN_FILENO,
             .output_descriptor = STDOUT_FILENO,
@@ -4263,7 +4263,7 @@ bool telos_chat_run(const struct telos_config *config,
             .rpc_mode = rpc_mode,
         };
 
-        result = telos_terminal_frontend_run(&frontend, error);
+        result = telos_tui_frontend_run(&frontend, error);
     }
     clear_chat(&chat);
     return result;

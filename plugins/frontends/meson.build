@@ -1,1 +1,1 @@
-subdir('terminal')
+subdir('tui')

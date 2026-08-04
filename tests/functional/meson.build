@@ -104,7 +104,7 @@ test(
     suite: 'functional',
 )
 
-if terminal_frontend_available and curl_transport_available
+if tui_frontend_available and curl_transport_available
     test_agent_server = executable(
         'test-agent-server',
         'test_agent_server.c',

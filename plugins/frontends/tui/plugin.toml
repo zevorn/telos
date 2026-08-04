@@ -1,6 +1,6 @@
 [plugin]
-id = "dev.zevorn.terminal-frontend"
-name = "Terminal Frontend"
+id = "dev.zevorn.tui-frontend"
+name = "TUI Frontend"
 version = "0.1.0"
 abi = 1
 entry = "telos_plugin_init_v1"
@@ -23,5 +23,5 @@ system = "meson"
 
 [permissions]
 required = [
-    "terminal.interactive",
+    "tui.interactive",
 ]

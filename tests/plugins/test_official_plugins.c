@@ -153,7 +153,7 @@ int main(int argc, char **argv)
         "network.https",
         "process.spawn",
         "secret.use:provider.openai",
-        "terminal.interactive",
+        "tui.interactive",
         "network.http:loopback",
     };
     const char *plugin_ids[] = {
@@ -163,7 +163,7 @@ int main(int argc, char **argv)
         "dev.zevorn.agent-skills",
         "dev.zevorn.project-guidance",
         "dev.zevorn.openai-codex-auth",
-        "dev.zevorn.terminal-frontend", "dev.zevorn.curl-transport",
+        "dev.zevorn.tui-frontend", "dev.zevorn.curl-transport",
         "dev.zevorn.model-catalog", "dev.zevorn.jsonl-store",
         "dev.zevorn.api-key-auth", "dev.zevorn.posix-tools",
     };

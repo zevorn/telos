@@ -18,7 +18,7 @@ released under the same rules as the Plugins maintained by the core team.
 | [JSONL Store](stores/jsonl/README.md) | Store | Linux and macOS with a filesystem |
 | [Agent Skills](resources/agent-skills/README.md) | Context Source | Linux and macOS |
 | [Project Guidance](context-sources/project-guidance/README.md) | Context Source | Linux and macOS |
-| [Terminal Frontend](frontends/terminal/README.md) | Frontend | Linux and macOS |
+| [Terminal Frontend](frontends/tui/README.md) | Frontend | Linux and macOS |
 | [curl Transport](transports/curl/README.md) | Transport | Linux and macOS |
 
 ## Plugin-first rule
@@ -51,13 +51,13 @@ Plugins are grouped by extension kind:
 plugins/
 ├── authentication/
 ├── context-sources/
+├── frontends/
 ├── providers/
 ├── resources/
 ├── stores/
 ├── tools/
-├── policies/
 ├── transports/
-├── frontends/
+├── tui/
 └── builders/
 ```
 

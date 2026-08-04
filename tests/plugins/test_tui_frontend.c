@@ -3,7 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <telos/plugins/terminal_frontend.h>
+#include <telos/plugins/tui_frontend.h>
 
 struct turn_fixture {
     size_t turns;
@@ -25,10 +25,12 @@ static bool emit_event(telos_frontend_emit_fn emit, void *context,
 
 static bool run_turn(const char *input, const struct telos_cancel *cancel,
                      telos_frontend_emit_fn emit, void *emit_context,
+                     const struct telos_frontend_steer *steer,
                      void *turn_context, struct telos_error **error)
 {
     struct turn_fixture *fixture = turn_context;
 
+    (void)steer;
     assert(!telos_cancel_requested(cancel));
     fixture->turns += 1;
     if (strcmp(input, "/clear") == 0) {
@@ -72,11 +74,11 @@ static bool run_turn(const char *input, const struct telos_cancel *cancel,
                       "clipboard", error);
 }
 
-static void expect_invalid(const telos_terminal_frontend_config *config)
+static void expect_invalid(const telos_tui_frontend_config *config)
 {
     struct telos_error *error = NULL;
 
-    assert(!telos_terminal_frontend_run(config, &error));
+    assert(!telos_tui_frontend_run(config, &error));
     assert(error != NULL);
     assert(telos_error_domain(error) == TELOS_ERROR_DOMAIN_ARGUMENT);
     telos_error_release(error);
@@ -115,7 +117,7 @@ int main(void)
     };
     int input_pipe[2];
     int output_pipe[2];
-    struct telos_terminal_frontend_config config;
+    struct telos_tui_frontend_config config;
     struct telos_frontend_session invalid_session;
     struct telos_error *error = NULL;
     char output[4096];
@@ -126,14 +128,14 @@ int main(void)
     assert(write(input_pipe[1], input, sizeof(input) - 1) ==
            (ssize_t)(sizeof(input) - 1));
     close(input_pipe[1]);
-    config = (struct telos_terminal_frontend_config){
+    config = (struct telos_tui_frontend_config){
         .session = &session,
         .input_descriptor = input_pipe[0],
         .output_descriptor = output_pipe[1],
         .maximum_input_bytes = 128,
         .force_plain = true,
     };
-    assert(telos_terminal_frontend_run(&config, &error));
+    assert(telos_tui_frontend_run(&config, &error));
     assert(error == NULL);
     close(input_pipe[0]);
     close(output_pipe[1]);
@@ -162,13 +164,13 @@ int main(void)
         assert(write(input_pipe[1], shell_input, sizeof(shell_input) - 1) ==
                (ssize_t)(sizeof(shell_input) - 1));
         close(input_pipe[1]);
-        config = (struct telos_terminal_frontend_config){
+        config = (struct telos_tui_frontend_config){
             .session = &session,
             .input_descriptor = input_pipe[0],
             .output_descriptor = output_pipe[1],
             .force_plain = true,
         };
-        assert(telos_terminal_frontend_run(&config, &error));
+        assert(telos_tui_frontend_run(&config, &error));
         assert(error == NULL);
         close(input_pipe[0]);
         close(output_pipe[1]);
@@ -193,20 +195,20 @@ int main(void)
         };
 
         assert(pipe(output_pipe) == 0);
-        config = (struct telos_terminal_frontend_config){
+        config = (struct telos_tui_frontend_config){
             .session = &single_session,
             .input_descriptor = STDIN_FILENO,
             .output_descriptor = output_pipe[1],
             .force_plain = true,
         };
-        assert(telos_terminal_frontend_run(&config, &error));
+        assert(telos_tui_frontend_run(&config, &error));
         assert(error == NULL);
         close(output_pipe[1]);
         assert(read_output(output_pipe[0], output, sizeof(output)) > 0);
         close(output_pipe[0]);
         assert(single_fixture.turns == 1);
         assert(strstr(output, "You > delta") != NULL);
-        assert(telos_terminal_frontend_run_stdio(&single_session, &error));
+        assert(telos_tui_frontend_run_stdio(&single_session, &error));
         assert(error == NULL);
     }
 
@@ -218,13 +220,13 @@ int main(void)
         assert(write(input_pipe[1], exit_input, sizeof(exit_input) - 1) ==
                (ssize_t)(sizeof(exit_input) - 1));
         close(input_pipe[1]);
-        config = (struct telos_terminal_frontend_config){
+        config = (struct telos_tui_frontend_config){
             .session = &session,
             .input_descriptor = input_pipe[0],
             .output_descriptor = output_pipe[1],
             .force_plain = true,
         };
-        assert(telos_terminal_frontend_run(&config, &error));
+        assert(telos_tui_frontend_run(&config, &error));
         assert(error == NULL);
         close(input_pipe[0]);
         close(output_pipe[0]);
@@ -240,13 +242,13 @@ int main(void)
                      sizeof(failure_input) - 1) ==
                (ssize_t)(sizeof(failure_input) - 1));
         close(input_pipe[1]);
-        config = (struct telos_terminal_frontend_config){
+        config = (struct telos_tui_frontend_config){
             .session = &session,
             .input_descriptor = input_pipe[0],
             .output_descriptor = output_pipe[1],
             .force_plain = true,
         };
-        assert(!telos_terminal_frontend_run(&config, &error));
+        assert(!telos_tui_frontend_run(&config, &error));
         assert(error != NULL);
         assert(telos_error_domain(error) == TELOS_ERROR_DOMAIN_STATE);
         telos_error_release(error);
@@ -263,12 +265,12 @@ int main(void)
         assert(pipe(input_pipe) == 0);
         assert(pipe(output_pipe) == 0);
         close(input_pipe[1]);
-        config = (struct telos_terminal_frontend_config){
+        config = (struct telos_tui_frontend_config){
             .session = &empty_session,
             .input_descriptor = input_pipe[0],
             .output_descriptor = output_pipe[1],
         };
-        assert(telos_terminal_frontend_run(&config, &error));
+        assert(telos_tui_frontend_run(&config, &error));
         assert(error == NULL);
         close(input_pipe[0]);
         close(output_pipe[0]);
@@ -281,13 +283,13 @@ int main(void)
         failure_session.initial_prompt = "fail";
         failure_session.single_turn = true;
         assert(pipe(output_pipe) == 0);
-        config = (struct telos_terminal_frontend_config){
+        config = (struct telos_tui_frontend_config){
             .session = &failure_session,
             .input_descriptor = STDIN_FILENO,
             .output_descriptor = output_pipe[1],
             .force_plain = true,
         };
-        assert(!telos_terminal_frontend_run(&config, &error));
+        assert(!telos_tui_frontend_run(&config, &error));
         assert(error != NULL);
         assert(telos_error_domain(error) == TELOS_ERROR_DOMAIN_STATE);
         telos_error_release(error);
@@ -300,13 +302,13 @@ int main(void)
     invalid_descriptor = dup(STDIN_FILENO);
     assert(invalid_descriptor >= 0);
     close(invalid_descriptor);
-    config = (struct telos_terminal_frontend_config){
+    config = (struct telos_tui_frontend_config){
         .session = &session,
         .input_descriptor = invalid_descriptor,
         .output_descriptor = output_pipe[1],
         .force_plain = true,
     };
-    assert(!telos_terminal_frontend_run(&config, &error));
+    assert(!telos_tui_frontend_run(&config, &error));
     assert(error != NULL);
     assert(telos_error_domain(error) == TELOS_ERROR_DOMAIN_IO);
     telos_error_release(error);
@@ -314,13 +316,13 @@ int main(void)
     close(output_pipe[0]);
     close(output_pipe[1]);
 
-    config = (struct telos_terminal_frontend_config){
+    config = (struct telos_tui_frontend_config){
         .session = &session,
         .input_descriptor = STDIN_FILENO,
         .output_descriptor = STDOUT_FILENO,
         .force_plain = true,
     };
-    assert(!telos_terminal_frontend_run(NULL, NULL));
+    assert(!telos_tui_frontend_run(NULL, NULL));
     expect_invalid(NULL);
     config.session = NULL;
     expect_invalid(&config);
@@ -351,7 +353,7 @@ int main(void)
     expect_invalid(&config);
     config.output_descriptor = STDOUT_FILENO;
     config.maximum_input_bytes =
-        TELOS_TERMINAL_DEFAULT_MAXIMUM_INPUT_BYTES + 1U;
+        TELOS_TUI_DEFAULT_MAXIMUM_INPUT_BYTES + 1U;
     expect_invalid(&config);
     return 0;
 }

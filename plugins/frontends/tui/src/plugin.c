@@ -1,21 +1,21 @@
 #include <telos/plugin.h>
-#include <telos/plugins/terminal_frontend.h>
+#include <telos/plugins/tui_frontend.h>
 
 static const char *const capabilities[] = {
-    "terminal.interactive",
+    "tui.interactive",
 };
 
 static const struct telos_frontend_definition_v1 definition = {
     .struct_size = sizeof(definition),
-    .id = "dev.zevorn.terminal-frontend",
-    .run = telos_terminal_frontend_run_stdio,
+    .id = "dev.zevorn.tui-frontend",
+    .run = telos_tui_frontend_run_stdio,
 };
 
 int telos_plugin_init_v1(const struct telos_host_api_v1 *host,
                          struct telos_plugin_registrar_v1 *registrar)
 {
     const struct telos_extension_descriptor descriptor = {
-        .id = "dev.zevorn.terminal-frontend",
+        .id = "dev.zevorn.tui-frontend",
         .kind = TELOS_EXTENSION_FRONTEND,
         .required_capabilities = capabilities,
         .required_capability_count = 1,
