@@ -80,6 +80,7 @@ unit_tests = [
     ['secret', 'test-secret', 'test_secret.c'],
     ['config-precedence', 'test-config', 'test_config.c'],
     ['config-invalid', 'test-config-invalid', 'test_config_invalid.c'],
+    ['task-scope', 'test-task-scope', 'test_task_scope.c'],
 ]
 
 foreach entry : unit_tests
