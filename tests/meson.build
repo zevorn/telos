@@ -19,3 +19,13 @@ if get_option('tests')
     subdir('plugins')
     subdir('functional')
 endif
+
+test(
+    'no-heap-gate',
+    find_program(meson.project_source_root() / 'tools/check_no_heap.sh'),
+    args: [
+        meson.project_source_root() / 'tools/noheap.list',
+        meson.project_source_root(),
+    ],
+    suite: 'core',
+)

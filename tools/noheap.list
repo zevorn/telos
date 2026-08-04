@@ -1,0 +1,7 @@
+# Critical-path sources that must never allocate on the heap.
+# Every entry is enforced by tools/check_no_heap.sh and compiled
+# with -DTELOS_NO_HEAP=1 so violations fail at compile time.
+src/base/clock.c
+src/base/id.c
+src/reactor/reactor.c
+src/store/store.c

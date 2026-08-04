@@ -20,6 +20,20 @@ struct telos_error *telos_error_create(enum telos_error_domain domain,
                                        const char *message,
                                        const struct telos_error *cause);
 
+/*
+ * No-heap error factory for no-heap paths (see telos/no_heap.h).
+ *
+ * Returns a process-wide singleton error; message must point to
+ * static storage (string literals are fine).  retain/release are
+ * no-ops on it, so it must not be held beyond the caller's use.
+ * The singleton is overwritten on every call: do not keep two
+ * static errors alive at once.  Intended for single-threaded
+ * critical paths only.
+ */
+struct telos_error *telos_error_static(enum telos_error_domain domain,
+                                       int code,
+                                       const char *message);
+
 struct telos_error *telos_error_retain(const struct telos_error *error);
 
 void telos_error_release(const struct telos_error *error);

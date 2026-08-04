@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -6,13 +7,23 @@
 
 #include <telos/error.h>
 
+/*
+ * Static errors (telos_error_static) carry this reference sentinel;
+ * retain/release treat it as immortal.
+ */
+#define TELOS_ERROR_STATIC_REFERENCES UINT_MAX
+
 struct telos_error {
     atomic_uint references;
     enum telos_error_domain domain;
     int code;
     struct telos_error *cause;
-    char message[];
+    const char *message;
+    char message_data[];
 };
+
+/* Process-wide singleton backing telos_error_static(). */
+static struct telos_error static_error_storage;
 
 struct telos_error *telos_error_create(enum telos_error_domain domain,
                                        int code,
@@ -41,7 +52,26 @@ struct telos_error *telos_error_create(enum telos_error_domain domain,
     error->domain = domain;
     error->code = code;
     error->cause = telos_error_retain(cause);
-    memcpy(error->message, message, message_size);
+    error->message = error->message_data;
+    memcpy(error->message_data, message, message_size);
+    return error;
+}
+
+struct telos_error *telos_error_static(enum telos_error_domain domain,
+                                       int code,
+                                       const char *message)
+{
+    struct telos_error *error = &static_error_storage;
+
+    if (domain < TELOS_ERROR_DOMAIN_ARGUMENT ||
+        domain > TELOS_ERROR_DOMAIN_PLUGIN || message == NULL) {
+        return NULL;
+    }
+    atomic_init(&error->references, TELOS_ERROR_STATIC_REFERENCES);
+    error->domain = domain;
+    error->code = code;
+    error->cause = NULL;
+    error->message = message;
     return error;
 }
 
@@ -49,10 +79,15 @@ struct telos_error *telos_error_retain(const struct telos_error *error)
 {
     struct telos_error *mutable_error = (struct telos_error *)error;
 
-    if (mutable_error != NULL) {
-        atomic_fetch_add_explicit(&mutable_error->references, 1,
-                                  memory_order_relaxed);
+    if (mutable_error == NULL ||
+        atomic_load_explicit(&mutable_error->references,
+                             memory_order_acquire) ==
+            TELOS_ERROR_STATIC_REFERENCES) {
+        return mutable_error;
     }
+
+    atomic_fetch_add_explicit(&mutable_error->references, 1,
+                              memory_order_relaxed);
 
     return mutable_error;
 }
@@ -62,6 +97,12 @@ void telos_error_release(const struct telos_error *error)
     struct telos_error *mutable_error = (struct telos_error *)error;
 
     if (mutable_error == NULL) {
+        return;
+    }
+
+    if (atomic_load_explicit(&mutable_error->references,
+                             memory_order_acquire) ==
+        TELOS_ERROR_STATIC_REFERENCES) {
         return;
     }
 

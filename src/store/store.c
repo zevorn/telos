@@ -1,13 +1,16 @@
 #include <errno.h>
 
 #include <telos/store_plugin.h>
+/* No-heap path: heap calls below this point fail to compile. */
+#define TELOS_NO_HEAP 1
+#include <telos/no_heap.h>
 
 void telos_store_set_error(struct telos_error **error,
                            enum telos_error_domain domain, int code,
                            const char *message)
 {
     if (error != NULL) {
-        *error = telos_error_create(domain, code, message, NULL);
+        *error = telos_error_static(domain, code, message);
     }
 }
 

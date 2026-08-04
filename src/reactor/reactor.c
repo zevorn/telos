@@ -3,6 +3,9 @@
 #include <string.h>
 
 #include <telos/reactor.h>
+/* No-heap path: heap calls below this point fail to compile. */
+#define TELOS_NO_HEAP 1
+#include <telos/no_heap.h>
 
 #define REACTOR_HANDLE_INDEX_BITS 8U
 #define REACTOR_HANDLE_INDEX_MASK \
@@ -13,7 +16,7 @@ static void set_error(struct telos_error **error,
                       const char *message)
 {
     if (error != NULL && *error == NULL) {
-        *error = telos_error_create(domain, code, message, NULL);
+        *error = telos_error_static(domain, code, message);
     }
 }
 

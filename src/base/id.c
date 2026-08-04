@@ -9,6 +9,9 @@
 #include <unistd.h>
 
 #include <telos/id.h>
+/* No-heap path: heap calls below this point fail to compile. */
+#define TELOS_NO_HEAP 1
+#include <telos/no_heap.h>
 
 static atomic_uint_fast64_t next_id = 1;
 static atomic_uint_fast64_t process_tag;
