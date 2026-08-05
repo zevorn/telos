@@ -41,8 +41,8 @@
 #define TUI_TOOL_NAME_SIZE 128U
 #define TUI_TOOL_DETAIL_SIZE 256U
 #define TUI_STEER_CAPACITY 8U
-#define TUI_HISTORY_CAPACITY 512U
-#define TUI_HISTORY_VISIBLE 12U
+#define TUI_HISTORY_CAPACITY 1024U
+#define TUI_HISTORY_VISIBLE 20U
 #define TUI_HISTORY_PAGE_SIZE 8U
 
 _Static_assert(TUI_STREAM_SIZE >
@@ -1549,6 +1549,34 @@ static bool write_footer(struct tui_state *state, size_t columns,
 }
 
 /*
+ * Move the terminal cursor to the editor caret.  Callers must have
+ * the cursor at the last rendered row (the footer, written with
+ * final=true) or at the caret itself; the routine returns to the
+ * caret row and column so the terminal caret always matches the
+ * input cursor, even after an in-place footer refresh.
+ */
+static void position_cursor(struct tui_state *state)
+{
+    struct editor_metrics metrics;
+    size_t columns = terminal_columns(state);
+    char sequence[64];
+    int size;
+
+    editor_metrics(state, columns > 4 ? columns - 4 : columns, &metrics);
+    write_text(state->output_descriptor, "\r");
+    if (state->rendered_rows > 1 &&
+        state->rendered_rows - 1 > state->rendered_cursor_row) {
+        size = snprintf(sequence, sizeof(sequence), "\033[%zuA",
+                        state->rendered_rows - 1 -
+                            state->rendered_cursor_row);
+        write_all(state->output_descriptor, sequence, (size_t)size);
+    }
+    size = snprintf(sequence, sizeof(sequence), "\033[%zuC",
+                    metrics.cursor_column + 2);
+    write_all(state->output_descriptor, sequence, (size_t)size);
+}
+
+/*
  * Redraw only the footer line in place, used to animate the spinner
  * between frames so the terminal scrollback is not polluted with
  * full-frame redraws.  The cursor is assumed to sit at the editor
@@ -1574,9 +1602,12 @@ static bool refresh_footer(struct tui_state *state)
     write_text(state->output_descriptor, "\r\033[K");
     write_all(state->output_descriptor, footer, strlen(footer));
     write_text(state->output_descriptor, "\033[0m");
-    size = snprintf(sequence, sizeof(sequence), "\033[%zuA",
-                    state->rendered_rows - 1 - state->rendered_cursor_row);
-    write_all(state->output_descriptor, sequence, (size_t)size);
+    /*
+     * Return to the caret: moving up alone leaves the cursor column
+     * at the end of the footer text, which makes the terminal caret
+     * drift away from the input caret.
+     */
+    position_cursor(state);
     return true;
 }
 
@@ -1606,8 +1637,6 @@ static bool render_dynamic(struct tui_state *state)
     size_t total_rows;
     char response[TUI_RENDER_LINE_SIZE] = {0};
     size_t response_used = 0;
-    char sequence[64];
-    int sequence_size;
 
     /* When an overlay is active, render only the overlay. */
     if (state->active_overlay != NULL &&
@@ -1850,16 +1879,7 @@ static bool render_dynamic(struct tui_state *state)
                                  response_rows + tool_rows +
                                  model_selector_rows + completion_rows + 1 +
                                  (metrics.cursor_row - first_row);
-    write_text(state->output_descriptor, "\r");
-    if (total_rows - 1 > state->rendered_cursor_row) {
-        sequence_size = snprintf(sequence, sizeof(sequence), "\033[%zuA",
-                                 total_rows - 1 - state->rendered_cursor_row);
-        write_all(state->output_descriptor, sequence,
-                  (size_t)sequence_size);
-    }
-    sequence_size = snprintf(sequence, sizeof(sequence), "\033[%zuC",
-                             metrics.cursor_column + 2);
-    write_all(state->output_descriptor, sequence, (size_t)sequence_size);
+    position_cursor(state);
     end_frame(state);
     return true;
 }
@@ -2350,7 +2370,7 @@ static bool render_history(struct tui_state *state, size_t columns,
         char indicator[64];
 
         if (snprintf(indicator, sizeof(indicator),
-                     "↑ %zu more", state->history_scroll) <
+                     "↑ %zu more · PgUp/Down scroll", state->history_scroll) <
             (int)sizeof(indicator)) {
             if (state->color) {
                 write_text(state->output_descriptor, "\033[38;5;245m");
